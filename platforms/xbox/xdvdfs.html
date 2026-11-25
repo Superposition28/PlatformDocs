@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>XDVDFS / XISO Optical Disc Filesystem — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#xbox" target="_top">Original Xbox</a><span>/</span><span>XDVDFS / XISO Filesystem</span>
+    </nav>
+
+    <div class="doc-overview">
+        <h1>XDVDFS / XISO Optical Disc Filesystem</h1>
+
+        <section class="format-summary">
+            <p class="eyebrow">Original Xbox &middot; Optical Disc Filesystem</p>
+            <p>
+                Proprietary read-only optical disc filesystem (also known as GDFX / Xbox DVD File System) used on
+                Original Xbox XGD1 game discs and trimmed XISO images. Organizes files in 2048-byte sectors using a
+                sector-32 volume descriptor and sector-aligned binary search tree (BST) directory tables.
+            </p>
+            <dl>
+                <dt>Canonical Filenames</dt>
+                <dd><code>*.iso</code> (full Redump XGD1 or trimmed XISO), <code>*.xiso</code></dd>
+                <dt>Magic Bytes</dt>
+                <dd><code>4D 49 43 52 4F 53 4F 46 54 2A 58 42 4F 58 2A 4D 45 44 49 41</code> (ASCII <code>MICROSOFT*XBOX*MEDIA</code>)</dd>
+                <dt>Endianness</dt>
+                <dd>Little-endian</dd>
+                <dt>Platform / OS Scope</dt>
+                <dd>Original Xbox (XGD1 &amp; XISO); later inherited inside Xbox 360 XGD2/XGD3 game partitions</dd>
+                <dt>Role / MIME</dt>
+                <dd>Optical disc filesystem container (<code>application/x-xbox-iso</code>)</dd>
+            </dl>
+        </section>
+
+        <nav class="page-toc" aria-label="On this page">
+            <ul>
+                <li><a href="#identification">1. Identification &amp; Scope</a></li>
+                <li><a href="#layout">2. Binary Layout Tables</a></li>
+                <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+                <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+                <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+                <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+            </ul>
+        </nav>
+
+        <section class="section" id="identification">
+            <h2>1. Identification &amp; Scope</h2>
+            <p>
+                XDVDFS divides the game partition into fixed <code>2048</code>-byte (<code>0x800</code>) sectors.
+                Relative to the start of the XDVDFS partition (<code>PartitionBase</code>), sectors <code>0..31</code>
+                are reserved/zeroed and <strong>Sector 32</strong> (<code>PartitionBase + 0x10000</code>) holds the
+                primary Volume Descriptor.
+            </p>
+            <ul>
+                <li><strong>Magic Verification:</strong> The 20-byte ASCII string <code>MICROSOFT*XBOX*MEDIA</code> appears twice in Sector 32: at offset <code>0x0000</code> and again at offset <code>0x07EC</code> (the final 20 bytes of the 2048-byte sector).</li>
+                <li><strong>Endianness:</strong> All sector indices, byte sizes, and BST offsets are little-endian (<code>u16le</code>, <code>u32le</code>, <code>u64le</code>).</li>
+                <li><strong>Partition Base Offset:</strong> On trimmed XISO images, <code>PartitionBase = 0x00000000</code>. On full Original Xbox XGD1 disc dumps, a 387 MB DVD-Video compatibility partition precedes the game partition, placing the XDVDFS partition at <code>PartitionBase = 0x18300000</code> (so the Volume Descriptor sits at <code>0x18310000</code>).</li>
+            </ul>
+        </section>
+
+        <section class="section" id="layout">
+            <h2>2. Binary Layout Tables</h2>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>XDVDFS Volume Descriptor (<code>PartitionBase + 0x10000</code>, Sector 32, 2048 bytes)</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>20</td><td><code>char[20]</code></td><td><code>MagicHead</code></td><td>ASCII <code>MICROSOFT*XBOX*MEDIA</code>.</td></tr>
+                        <tr><td><code>0x0014</code></td><td>4</td><td><code>u32le</code></td><td><code>RootDirectorySector</code></td><td>Sector index (relative to <code>PartitionBase</code>) of the root directory table.</td></tr>
+                        <tr><td><code>0x0018</code></td><td>4</td><td><code>u32le</code></td><td><code>RootDirectorySize</code></td><td>Byte size of the root directory table (multiple of 2048 or exact byte length).</td></tr>
+                        <tr><td><code>0x001C</code></td><td>8</td><td><code>u64le</code></td><td><code>MasteringTime</code></td><td>Windows <code>FILETIME</code> timestamp (100-ns intervals since 1601-01-01 UTC).</td></tr>
+                        <tr><td><code>0x0024</code></td><td>1992</td><td><code>u8[1992]</code></td><td><code>ReservedZero</code></td><td>Unused padding bytes (zero-filled on standard mastered discs).</td></tr>
+                        <tr><td><code>0x07EC</code></td><td>20</td><td><code>char[20]</code></td><td><code>MagicTail</code></td><td>Closing signature <code>MICROSOFT*XBOX*MEDIA</code> (ends at <code>0x0800</code>).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>XDVDFS Directory Entry Record (Variable Length, 4-Byte Aligned)</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>2</td><td><code>u16le</code></td><td><code>LeftChildOffset</code></td><td>Offset to left BST child in <code>u32</code> (4-byte) units from directory table start (<code>0</code> = none; <code>0xFFFF</code> = sector-tail padding).</td></tr>
+                        <tr><td><code>0x0002</code></td><td>2</td><td><code>u16le</code></td><td><code>RightChildOffset</code></td><td>Offset to right BST child in <code>u32</code> (4-byte) units from directory table start (<code>0</code> = none).</td></tr>
+                        <tr><td><code>0x0004</code></td><td>4</td><td><code>u32le</code></td><td><code>StartSector</code></td><td>Starting sector of the file payload or child directory table (relative to <code>PartitionBase</code>).</td></tr>
+                        <tr><td><code>0x0008</code></td><td>4</td><td><code>u32le</code></td><td><code>FileSize</code></td><td>File size in bytes (or directory table byte size when <code>Attributes &amp; 0x10</code> is set).</td></tr>
+                        <tr><td><code>0x000C</code></td><td>1</td><td><code>u8</code></td><td><code>Attributes</code></td><td>DOS/Xbox file attribute bitmask.</td></tr>
+                        <tr><td><code>0x000D</code></td><td>1</td><td><code>u8</code></td><td><code>FilenameLength</code></td><td>Length of the entry name in bytes (<code>1..255</code>).</td></tr>
+                        <tr><td><code>0x000E</code></td><td><code>N</code></td><td><code>char[N]</code></td><td><code>Filename</code></td><td>Unpadded ASCII filename (no NUL terminator; case-insensitive lookup).</td></tr>
+                        <tr><td><code>0x000E + N</code></td><td><code>0..3</code></td><td><code>u8[0..3]</code></td><td><code>AlignPad</code></td><td><code>0xFF</code> padding bytes rounding total record size up to a 4-byte boundary.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section" id="flags">
+            <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>XDVDFS Entry Attribute Flags (<code>Attributes</code> at <code>+0x0C</code>)</caption>
+                    <thead>
+                        <tr>
+                            <th>Bitmask</th>
+                            <th>Flag Name</th>
+                            <th>Meaning</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x01</code></td><td><code>FILE_ATTRIBUTE_READONLY</code></td><td>Read-only file (standard for optical media).</td></tr>
+                        <tr><td><code>0x02</code></td><td><code>FILE_ATTRIBUTE_HIDDEN</code></td><td>Hidden entry.</td></tr>
+                        <tr><td><code>0x04</code></td><td><code>FILE_ATTRIBUTE_SYSTEM</code></td><td>System file flag.</td></tr>
+                        <tr><td><code>0x10</code></td><td><code>FILE_ATTRIBUTE_DIRECTORY</code></td><td>Entry is a subdirectory; <code>StartSector</code> and <code>FileSize</code> point to a child directory table.</td></tr>
+                        <tr><td><code>0x20</code></td><td><code>FILE_ATTRIBUTE_ARCHIVE</code></td><td>Archive attribute.</td></tr>
+                        <tr><td><code>0x80</code></td><td><code>FILE_ATTRIBUTE_NORMAL</code></td><td>Normal file with no special attributes.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3>BST Alignment, Child Offsets &amp; Sector-Tail Padding Formulas</h3>
+<pre><code>// Byte offset of a directory or file payload in the image stream:
+absolute_offset = PartitionBase + (u64(StartSector) * 2048)
+
+// Aligned size of a single directory entry record (4-byte alignment):
+entry_byte_size = (14 + FilenameLength + 3) &amp; ~3
+
+// Converting LeftChildOffset / RightChildOffset to byte offset within the directory table:
+left_byte_offset  = u32(LeftChildOffset)  * 4    // 0 means no left child
+right_byte_offset = u32(RightChildOffset) * 4    // 0 means no right child</code></pre>
+            <p>
+                Entries are never split across a 2048-byte sector boundary. Whenever the next directory entry does not fit
+                in the remaining bytes of the current 2048-byte sector, the remainder of that sector is filled with
+                <code>0xFF</code> bytes (observed as <code>LeftChildOffset == 0xFFFF</code>), and the next entry begins
+                at offset <code>0</code> of the following sector.
+            </p>
+        </section>
+
+        <section class="section" id="edge-cases">
+            <h2>4. Edge Cases &amp; Loader Rules</h2>
+            <ul>
+                <li><strong>Full Redump XGD1 vs. Trimmed XISO Detection:</strong> Parsers must probe candidate partition bases before failing. For Original Xbox images, check <code>0x00000000 + 0x10000</code> (trimmed XISO) and <code>0x18300000 + 0x10000</code> (full XGD1 ISO with 387 MB DVD-Video partition) for <code>MICROSOFT*XBOX*MEDIA</code>. (Xbox 360 XGD2/XGD3 discs place XDVDFS at other partition offsets.)</li>
+                <li><strong>Non-Recursive Stack-Based BST Traversal:</strong> Each directory table encodes an alphabetical binary search tree keyed by uppercase ASCII filename comparison, where entry 0 at byte offset <code>0</code> is the root node. To prevent stack overflow on malformed or unbalanced trees and avoid missing entries if tree order is non-standard, parsers should maintain an explicit work stack (plus a visited-offset set) rather than unbounded recursion.</li>
+                <li><strong>Cycle &amp; Bounds Guards:</strong> Always validate <code>left_byte_offset &lt; DirectorySize</code>, <code>right_byte_offset &lt; DirectorySize</code>, track visited `(dir_sector, entry_offset)` pairs to reject self-loops, and cap directory nesting depth (e.g., 64 levels).</li>
+                <li><strong>Empty Directory / Zero-Length Files:</strong> If <code>RootDirectorySize == 0</code>, the volume has no files. A directory entry with <code>Attributes &amp; 0x10</code> and <code>FileSize == 0</code> represents an empty directory; do not attempt to read a directory table from sector 0 if <code>StartSector == 0</code> or <code>FileSize == 0</code>.</li>
+                <li><strong>Sector-Tail <code>0xFF</code> vs. <code>0x00</code> Padding:</strong> Some mastering tools pad sector tails with <code>0xFF</code> (triggering <code>0xFFFF</code> on <code>LeftChildOffset</code>), while others leave trailing <code>0x00</code> bytes where <code>FilenameLength == 0</code>. Either condition ends scanning for the current sector and advances to the next 2048-byte sector if within <code>DirectorySize</code>.</li>
+            </ul>
+        </section>
+
+        <section class="section" id="pseudocode">
+            <h2>5. Step-by-Step Parser Pseudocode</h2>
+<pre><code>const SECTOR_SIZE = 2048
+const XDVDFS_MAGIC = b"MICROSOFT*XBOX*MEDIA"
+const CANDIDATE_BASES = [0x00000000, 0x18300000]  // XISO, XGD1
+
+function parse_xdvdfs(stream):
+    partition_base = null
+    for base in CANDIDATE_BASES:
+        if base + 0x10000 + SECTOR_SIZE &lt;= size_of(stream):
+            if read_bytes(stream, base + 0x10000, 20) == XDVDFS_MAGIC:
+                partition_base = base
+                break
+    assert partition_base != null
+
+    vd_off = partition_base + 0x10000
+    assert read_bytes(stream, vd_off + 0x07EC, 20) == XDVDFS_MAGIC
+    root_sector = read_u32le(stream, vd_off + 0x0014)
+    root_size   = read_u32le(stream, vd_off + 0x0018)
+    if root_sector == 0 or root_size == 0:
+        return []
+
+    files = []
+    dir_queue = [{ path: "", sector: root_sector, size: root_size, depth: 0 }]
+    visited_dirs = set()
+
+    while dir_queue is not empty:
+        dir = pop(dir_queue)
+        if dir.depth &gt; 64 or (dir.sector, dir.path) in visited_dirs:
+            continue
+        visited_dirs.add((dir.sector, dir.path))
+
+        table = read_bytes(stream, partition_base + dir.sector * SECTOR_SIZE, dir.size)
+        // Non-recursive BST traversal using an explicit offset stack
+        stack = [0]
+        visited_nodes = set()
+
+        while stack is not empty:
+            off = pop(stack)
+            if off in visited_nodes or off + 14 &gt; length(table):
+                continue
+            left_units  = read_u16le(table, off + 0x00)
+            right_units = read_u16le(table, off + 0x02)
+            if left_units == 0xFFFF:
+                continue
+            visited_nodes.add(off)
+
+            start_sector = read_u32le(table, off + 0x04)
+            file_size    = read_u32le(table, off + 0x08)
+            attrs        = read_u8(table, off + 0x0C)
+            name_len     = read_u8(table, off + 0x0D)
+            if name_len == 0 or off + 14 + name_len &gt; length(table):
+                continue
+
+            name = decode_ascii(table[off + 14 .. off + 14 + name_len])
+            full_path = dir.path == "" ? name : dir.path + "/" + name
+
+            if (attrs &amp; 0x10) != 0:
+                if start_sector != 0 and file_size &gt; 0:
+                    push(dir_queue, { path: full_path, sector: start_sector, size: file_size, depth: dir.depth + 1 })
+            else:
+                files.append({
+                    path: full_path,
+                    offset: partition_base + start_sector * SECTOR_SIZE,
+                    size: file_size,
+                    attrs: attrs,
+                })
+
+            if right_units != 0:
+                push(stack, right_units * 4)
+            if left_units != 0:
+                push(stack, left_units * 4)
+
+    return files</code></pre>
+        </section>
+
+        <section class="section" id="provenance">
+            <h2>6. Provenance &amp; Confidence</h2>
+            <p>
+                <strong>High Confidence:</strong> The 2048-byte sector grid, Sector 32 volume descriptor layout, dual
+                <code>MICROSOFT*XBOX*MEDIA</code> magic strings, 4-byte aligned BST directory entry format,
+                <code>0xFFFF</code> sector-boundary padding, and <code>0x18300000</code> XGD1 partition offset are
+                completely deterministic and verified across Xbox kernels and archival ISO tooling.
+            </p>
+            <aside class="callout-warn">
+                <strong>Raw vs. Trimmed Image Caveat:</strong> Redump-style full XGD1 optical dumps retain the
+                <code>0x18300000</code>-byte DVD-Video partition (and security/SS/DMI metadata in separate sidecar files),
+                whereas community-trimmed XISOs strip the video partition so XDVDFS begins at offset <code>0x0</code>.
+                Wait to verify <code>MagicTail</code> at <code>+0x07EC</code> in addition to <code>MagicHead</code> at
+                <code>+0x0000</code> if rejecting corrupt sector-32 descriptors.
+            </aside>
+        </section>
+    </div>
+</body>
+</html>

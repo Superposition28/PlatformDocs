@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Windows PC Platform Formats — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><span>Windows PC</span>
+    </nav>
+
+    <h1>Windows PC (Win32 / Win64)</h1>
+
+    <section class="format-summary" aria-label="Platform summary">
+        <p class="eyebrow">Platform Overview · x86 / x86-64 / ARM64</p>
+        <p>Platform-inherited executable, resource, debug symbol, and installer container specifications for Microsoft Windows NT (Win32 and Win64) across x86 (IA-32), x86-64 (AMD64), and ARM64 (AArch64) architectures.</p>
+        <dl>
+            <dt>Target Architectures</dt>
+            <dd>x86 (<code>0x014C</code>), x86-64 / AMD64 (<code>0x8664</code>), ARM64 / AArch64 (<code>0xAA64</code>), ARM64EC (<code>0xA641</code>)</dd>
+            <dt>Native Byte Order</dt>
+            <dd>Little-endian across all PE/COFF headers, resource trees, MSF/PDB streams, and OLE Compound Files (GUIDs use mixed-endian layout)</dd>
+            <dt>Executable Model</dt>
+            <dd>Portable Executable (PE32 / PE32+) mapped from file alignment into page-aligned virtual address space by <code>ntdll.dll</code></dd>
+            <dt>Scope Boundary</dt>
+            <dd>OS-defined headers, loader tables, resources, symbol containers, and installer packaging only; excludes all application or game assets</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#architecture">Architecture &amp; Loader Model</a></li>
+            <li><a href="#formats">Platform Format Index</a></li>
+            <li><a href="#abbreviations">Key Terms &amp; Addressing</a></li>
+        </ul>
+    </nav>
+
+    <section id="architecture">
+        <h2>Architecture &amp; Win32/Win64 Loader Model</h2>
+        <p>Windows NT separates executables into on-disk <code>FileAlignment</code> blocks (typically <code>0x0200</code> bytes) and in-memory <code>SectionAlignment</code> pages (typically <code>0x1000</code> bytes, 4 KiB). Every linked PE image is a self-describing virtual memory snapshot anchored at a preferred <code>ImageBase</code>.</p>
+        <ol>
+            <li><strong>Header Validation &amp; Mapping:</strong> The kernel/user loader (<code>MmCreateSection</code> / <code>ntdll!LdrInitializeThunk</code>) verifies the DOS <code>MZ</code> header, follows <code>e_lfanew</code> to the <code>PE\0\0</code> signature, validates the COFF <code>Machine</code> and Optional Header <code>Magic</code> (<code>0x010B</code> for PE32, <code>0x020B</code> for PE32+), and maps headers plus section raw bytes into virtual pages, zero-filling any <code>VirtualSize &gt; SizeOfRawData</code> tail.</li>
+            <li><strong>ASLR &amp; Base Relocation:</strong> When <code>IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE</code> is set or a base collision occurs, the loader maps the module at a new base and processes <code>DataDirectory[5]</code> (<code>.reloc</code>) to patch absolute virtual addresses by <code>delta = ActualBase - ImageBase</code>.</li>
+            <li><strong>Import Resolution &amp; API Sets:</strong> The loader walks <code>DataDirectory[1]</code> (Import Directory Table), resolves dependency DLL names (including Win10/11 API Set forwarders such as <code>api-ms-win-*</code>), looks up functions by hint/name or ordinal in the callee's Export Directory (<code>DataDirectory[0]</code>), and writes resolved virtual addresses into the Import Address Table (IAT), then marks read-only IAT pages non-writable.</li>
+            <li><strong>Exception, TLS &amp; Security Initialization:</strong> On x64 and ARM64, the loader registers <code>DataDirectory[3]</code> (<code>.pdata</code> <code>RUNTIME_FUNCTION</code> tables) for stack unwinding and SEH. If <code>DataDirectory[9]</code> (<code>.tls</code>) is present, it allocates per-thread TLS slots and invokes registered TLS callbacks prior to calling <code>AddressOfEntryPoint</code>.</li>
+            <li><strong>Distribution, Resources &amp; Symbols:</strong> Standard Win32 metadata lives in <code>.rsrc</code> (version blocks, SxS manifests, icons), Authenticode PKCS#7 signatures in <code>DataDirectory[4]</code>, CodeView <code>RSDS</code> debug pointers in <code>DataDirectory[6]</code> linking to external <code>.pdb</code> (MSF 7.0) symbol files, and system installers in <code>.msi</code> OLE Compound File databases.</li>
+        </ol>
+    </section>
+
+    <section id="formats">
+        <h2>Platform Format Index</h2>
+        <div class="table-scroll" role="region" aria-label="Windows platform format specifications" tabindex="0">
+            <table class="format-counts">
+                <caption>Windows PC platform-inherited specifications</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Specification</th>
+                        <th scope="col">Canonical Extensions / Files</th>
+                        <th scope="col">Magic / Signature</th>
+                        <th scope="col">Endianness</th>
+                        <th scope="col">Primary Scope</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><a href="../../index.html#windows-pe-coff" target="_top">PE/COFF Headers &amp; Sections</a></td>
+                        <td><code>.exe</code>, <code>.dll</code>, <code>.sys</code>, <code>.ocx</code>, <code>.scr</code>, <code>.cpl</code></td>
+                        <td><code>MZ</code> (<code>0x5A4D</code>) + <code>PE\0\0</code> (<code>0x00004550</code>)</td>
+                        <td>Little-endian</td>
+                        <td>DOS MZ stub, COFF header, PE32/PE32+ Optional Header, Data Directory slots, Section Headers</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#windows-pe-tables" target="_top">PE Data Directories &amp; Tables</a></td>
+                        <td>Embedded PE directories (<code>.idata</code>, <code>.edata</code>, <code>.reloc</code>, <code>.pdata</code>, <code>.tls</code>)</td>
+                        <td>Directory RVA/Size slots (0, 1, 3, 4, 5, 9, 13)</td>
+                        <td>Little-endian</td>
+                        <td>IDT/ILT/IAT, Delay-Import, EAT, Base Relocations, TLS, <code>RUNTIME_FUNCTION</code>, Authenticode</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#windows-pe-resources" target="_top">PE Resource Tree (.rsrc)</a></td>
+                        <td>Embedded <code>.rsrc</code> section (<code>.exe</code> / <code>.dll</code> / <code>.mui</code>)</td>
+                        <td><code>DataDirectory[2]</code>; <code>0xFEEF04BD</code> (<code>VS_FIXEDFILEINFO</code>)</td>
+                        <td>Little-endian</td>
+                        <td>3-level <code>IMAGE_RESOURCE_DIRECTORY</code>, <code>VS_VERSIONINFO</code>, <code>RT_MANIFEST</code> XML, <code>RT_GROUP_ICON</code> / <code>RT_ICON</code></td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#windows-pdb-msi" target="_top">PDB Symbols &amp; MSI Containers</a></td>
+                        <td><code>.pdb</code>, <code>.msi</code>, <code>.msp</code>, <code>.msm</code></td>
+                        <td><code>RSDS</code>, <code>Microsoft C/C++ MSF 7.00</code>, <code>D0 CF 11 E0 A1 B1 1A E1</code></td>
+                        <td>Little-endian (GUIDs mixed)</td>
+                        <td>CodeView <code>RSDS</code>, MSF 7.0 SuperBlock/FPM/Streams (PDB/TPI/DBI), OLE Compound File Binary</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="abbreviations">
+        <h2>Key Terms &amp; Addressing</h2>
+        <div class="table-scroll" role="region" aria-label="Windows PE addressing terminology" tabindex="0">
+            <table class="format-counts">
+                <caption>PE/COFF addressing terms used across all Windows specifications</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Term</th>
+                        <th scope="col">Width</th>
+                        <th scope="col">Base Reference</th>
+                        <th scope="col">Formula</th>
+                        <th scope="col">Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>File Offset (Raw)</td>
+                        <td>32-bit / 64-bit</td>
+                        <td>Byte <code>0x00</code> of file</td>
+                        <td><code>PointerToRawData + (RVA - VirtualAddress)</code></td>
+                        <td>Used on disk; valid only when <code>(RVA - VirtualAddress) &lt; SizeOfRawData</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>RVA (Relative Virtual Address)</td>
+                        <td>32-bit (<code>u32le</code>)</td>
+                        <td>Loaded <code>ImageBase</code></td>
+                        <td><code>VA - ActualImageBase</code></td>
+                        <td>Position-independent offset used by PE headers, exports, imports, and <code>.pdata</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>VA (Virtual Address)</td>
+                        <td>32-bit (PE32) / 64-bit (PE32+)</td>
+                        <td>Process virtual memory <code>0x0</code></td>
+                        <td><code>PreferredImageBase + RVA</code></td>
+                        <td>Stored in TLS directory fields and legacy delay-import descriptors; patched by <code>.reloc</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</body>
+</html>

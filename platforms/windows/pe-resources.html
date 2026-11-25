@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PE Resource Tree (.rsrc) — Windows PC</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#windows" target="_top">Windows PC</a><span>/</span><span>PE Resource Tree (.rsrc)</span>
+    </nav>
+
+    <h1>PE <code>.rsrc</code> Resource Tree, Version Info, Manifests &amp; Icons</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Executable Resource Section · DataDirectory[2]</p>
+        <p>Hierarchical 3-level resource tree embedded in Windows PE binaries (<code>.rsrc</code>) storing localized UI assets, <code>VS_VERSIONINFO</code> metadata, Side-by-Side (SxS) XML manifests, and multi-resolution icon groups.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>.rsrc</code> section inside <code>.exe</code>, <code>.dll</code>, <code>.mui</code>, <code>.cpl</code>, <code>.scr</code> (also standalone compiled <code>.res</code> in COFF link inputs)</dd>
+            <dt>Magic Bytes</dt>
+            <dd>Root at <code>DataDirectory[2].VirtualAddress</code>; <code>VS_FIXEDFILEINFO</code> magic <code>BD 04 EF FE</code> (<code>0xFEEF04BD</code> LE)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian; resource names and version strings are UTF-16LE</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Windows NT Win32 / Win64 Resource Manager (<code>FindResource</code> / <code>LoadResource</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Binary UI/metadata tree (icons, version stamps, DPI/elevation manifests, string tables)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>The resource tree begins at the RVA given by <code>OptionalHeader.DataDirectory[2]</code> (normally the start of the <code>.rsrc</code> section). By Windows convention, the tree has exactly three directory levels:</p>
+        <ol>
+            <li><strong>Level 1 — Type:</strong> Standard numeric <code>RT_*</code> ID (e.g. <code>3</code> = <code>RT_ICON</code>, <code>14</code> = <code>RT_GROUP_ICON</code>, <code>16</code> = <code>RT_VERSION</code>, <code>24</code> = <code>RT_MANIFEST</code>) or custom UTF-16LE string name.</li>
+            <li><strong>Level 2 — Name / ID:</strong> Resource identifier (integer ID or UTF-16LE string).</li>
+            <li><strong>Level 3 — Language:</strong> 16-bit Windows <code>LANGID</code> (e.g. <code>0x0409</code> for <code>en-US</code>, <code>0x0000</code> language-neutral), whose entries point to <code>IMAGE_RESOURCE_DATA_ENTRY</code> leaves.</li>
+        </ol>
+        <p>All integers in <code>.rsrc</code> are little-endian. Directory-internal offsets (names and child directories) are relative to the <strong>start of the resource table</strong> (<code>rsrc_base</code>), whereas leaf <code>OffsetToData</code> is an <strong>RVA relative to <code>ImageBase</code></strong>.</p>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="IMAGE_RESOURCE_DIRECTORY and Entry" tabindex="0">
+            <table class="format-counts">
+                <caption>IMAGE_RESOURCE_DIRECTORY (16 bytes) &amp; IMAGE_RESOURCE_DIRECTORY_ENTRY (8 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Dir +0x00</td><td>4</td><td>u32le</td><td>Characteristics</td><td>Resource flags; reserved, <code>0</code>.</td></tr>
+                    <tr><td>Dir +0x04</td><td>4</td><td>u32le</td><td>TimeDateStamp</td><td>Creation time of resource data.</td></tr>
+                    <tr><td>Dir +0x08</td><td>2</td><td>u16le</td><td>MajorVersion</td><td>Major resource version.</td></tr>
+                    <tr><td>Dir +0x0A</td><td>2</td><td>u16le</td><td>MinorVersion</td><td>Minor resource version.</td></tr>
+                    <tr><td>Dir +0x0C</td><td>2</td><td>u16le</td><td>NumberOfNamedEntries</td><td>Count of named entries immediately following (sorted case-insensitively).</td></tr>
+                    <tr><td>Dir +0x0E</td><td>2</td><td>u16le</td><td>NumberOfIdEntries</td><td>Count of numeric ID entries immediately following the named entries.</td></tr>
+                    <tr><td>Entry +0x00</td><td>4</td><td>u32le</td><td>NameOrId</td><td>If bit 31 = 1: bits <code>30..0</code> = offset from <code>rsrc_base</code> to <code>{ u16le Length; u16le Name[Length] }</code>. Else: 16-bit ID.</td></tr>
+                    <tr><td>Entry +0x04</td><td>4</td><td>u32le</td><td>OffsetToData</td><td>If bit 31 = 1: bits <code>30..0</code> = offset from <code>rsrc_base</code> to child <code>IMAGE_RESOURCE_DIRECTORY</code>. Else: offset to <code>IMAGE_RESOURCE_DATA_ENTRY</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="IMAGE_RESOURCE_DATA_ENTRY layout" tabindex="0">
+            <table class="format-counts">
+                <caption>IMAGE_RESOURCE_DATA_ENTRY (16 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>+0x00</td><td>4</td><td>u32le</td><td>OffsetToData</td><td><strong>RVA</strong> (relative to <code>ImageBase</code>, NOT <code>rsrc_base</code>) of raw resource payload.</td></tr>
+                    <tr><td>+0x04</td><td>4</td><td>u32le</td><td>Size</td><td>Byte size of the resource payload.</td></tr>
+                    <tr><td>+0x08</td><td>4</td><td>u32le</td><td>CodePage</td><td>Code page for interpreting legacy string data (typically <code>0</code> or <code>1200</code>/<code>1252</code>).</td></tr>
+                    <tr><td>+0x0C</td><td>4</td><td>u32le</td><td>Reserved</td><td>Must be <code>0</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="VS_VERSIONINFO and VS_FIXEDFILEINFO layout" tabindex="0">
+            <table class="format-counts">
+                <caption>RT_VERSION (16) — VS_VERSIONINFO Node Header &amp; VS_FIXEDFILEINFO (52 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Node +0x00</td><td>2</td><td>u16le</td><td>wLength</td><td>Total byte length of this version node including children (excludes trailing alignment padding).</td></tr>
+                    <tr><td>Node +0x02</td><td>2</td><td>u16le</td><td>wValueLength</td><td>Byte length of <code>Value</code> (<code>0x0034</code> = 52 bytes for root <code>VS_FIXEDFILEINFO</code>; word count for <code>String</code> text!).</td></tr>
+                    <tr><td>Node +0x04</td><td>2</td><td>u16le</td><td>wType</td><td><code>0</code> = binary value, <code>1</code> = UTF-16LE text value.</td></tr>
+                    <tr><td>Node +0x06</td><td>var</td><td>utf16le_z</td><td>szKey</td><td>Null-terminated UTF-16LE key (<code>"VS_VERSION_INFO"</code>, <code>"StringFileInfo"</code>, <code>"VarFileInfo"</code>), padded to 4-byte boundary.</td></tr>
+                    <tr><td>Fixed +0x00</td><td>4</td><td>u32le</td><td>dwSignature</td><td>Must be <code>0xFEEF04BD</code>.</td></tr>
+                    <tr><td>Fixed +0x04</td><td>4</td><td>u32le</td><td>dwStrucVersion</td><td>Binary structure version (<code>0x00010000</code> = 1.0).</td></tr>
+                    <tr><td>Fixed +0x08</td><td>4</td><td>u32le</td><td>dwFileVersionMS</td><td>High 32 bits of file version: <code>(Major &lt;&lt; 16) | Minor</code>.</td></tr>
+                    <tr><td>Fixed +0x0C</td><td>4</td><td>u32le</td><td>dwFileVersionLS</td><td>Low 32 bits of file version: <code>(Build &lt;&lt; 16) | Revision</code>.</td></tr>
+                    <tr><td>Fixed +0x10</td><td>4</td><td>u32le</td><td>dwProductVersionMS</td><td>High 32 bits of product version.</td></tr>
+                    <tr><td>Fixed +0x14</td><td>4</td><td>u32le</td><td>dwProductVersionLS</td><td>Low 32 bits of product version.</td></tr>
+                    <tr><td>Fixed +0x18</td><td>4</td><td>u32le</td><td>dwFileFlagsMask</td><td>Bitmask of valid bits in <code>dwFileFlags</code> (typically <code>0x3F</code>).</td></tr>
+                    <tr><td>Fixed +0x1C</td><td>4</td><td>u32le</td><td>dwFileFlags</td><td>Flags: Debug (<code>0x1</code>), Prerelease (<code>0x2</code>), Patched (<code>0x4</code>), PrivateBuild (<code>0x8</code>), SpecialBuild (<code>0x20</code>).</td></tr>
+                    <tr><td>Fixed +0x20</td><td>4</td><td>u32le</td><td>dwFileOS</td><td>Target OS (e.g. <code>0x00040004</code> = <code>VOS_NT_WINDOWS32</code>).</td></tr>
+                    <tr><td>Fixed +0x24</td><td>4</td><td>u32le</td><td>dwFileType</td><td><code>1</code> = App, <code>2</code> = DLL, <code>3</code> = Driver, <code>4</code> = Font, <code>7</code> = Static Lib.</td></tr>
+                    <tr><td>Fixed +0x28</td><td>4</td><td>u32le</td><td>dwFileSubtype</td><td>Driver or font subtype when applicable; else <code>0</code>.</td></tr>
+                    <tr><td>Fixed +0x2C</td><td>8</td><td>u32le[2]</td><td>dwFileDateMS / LS</td><td>64-bit FILETIME creation timestamp (typically <code>0, 0</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="GRPICONDIR and GRPICONDIRENTRY layout" tabindex="0">
+            <table class="format-counts">
+                <caption>RT_GROUP_ICON (14) — GRPICONDIR (6 bytes) &amp; GRPICONDIRENTRY (14 bytes each)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Dir +0x00</td><td>2</td><td>u16le</td><td>idReserved</td><td>Must be <code>0</code>.</td></tr>
+                    <tr><td>Dir +0x02</td><td>2</td><td>u16le</td><td>idType</td><td><code>1</code> = Icon (<code>RT_ICON</code>), <code>2</code> = Cursor (<code>RT_CURSOR</code>).</td></tr>
+                    <tr><td>Dir +0x04</td><td>2</td><td>u16le</td><td>idCount</td><td>Number of <code>GRPICONDIRENTRY</code> records that follow.</td></tr>
+                    <tr><td>Entry +0x00</td><td>1</td><td>u8</td><td>bWidth</td><td>Width in pixels (<code>0</code> means <code>256</code>).</td></tr>
+                    <tr><td>Entry +0x01</td><td>1</td><td>u8</td><td>bHeight</td><td>Height in pixels (<code>0</code> means <code>256</code>).</td></tr>
+                    <tr><td>Entry +0x02</td><td>1</td><td>u8</td><td>bColorCount</td><td>Palette color count (<code>0</code> if &ge; 8 bpp).</td></tr>
+                    <tr><td>Entry +0x03</td><td>1</td><td>u8</td><td>bReserved</td><td>Must be <code>0</code>.</td></tr>
+                    <tr><td>Entry +0x04</td><td>2</td><td>u16le</td><td>wPlanes</td><td>Color planes (cursor hotspot X for <code>RT_GROUP_CURSOR</code>).</td></tr>
+                    <tr><td>Entry +0x06</td><td>2</td><td>u16le</td><td>wBitCount</td><td>Bits per pixel (cursor hotspot Y for <code>RT_GROUP_CURSOR</code>).</td></tr>
+                    <tr><td>Entry +0x08</td><td>4</td><td>u32le</td><td>dwBytesInRes</td><td>Byte size of the referenced <code>RT_ICON</code> resource data.</td></tr>
+                    <tr><td>Entry +0x0C</td><td>2</td><td>u16le</td><td>nID</td><td>Resource ID of matching <code>RT_ICON</code> (Type <code>3</code>) leaf (replaces 4-byte file offset in standalone <code>.ico</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <div class="table-scroll" role="region" aria-label="Standard Windows Resource Types" tabindex="0">
+            <table class="format-counts">
+                <caption>Standard Level-1 Resource Types (RT_*)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">ID</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Constant</th>
+                        <th scope="col">Payload Summary</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>1</td><td>2</td><td>u16le</td><td>RT_CURSOR</td><td>Hardware-dependent cursor DIB preceded by <code>u16le xHotspot, u16le yHotspot</code>.</td></tr>
+                    <tr><td>2</td><td>2</td><td>u16le</td><td>RT_BITMAP</td><td>Device-Independent Bitmap (starts at <code>BITMAPINFOHEADER</code>, omitting 14-byte <code>BITMAPFILEHEADER</code>).</td></tr>
+                    <tr><td>3</td><td>2</td><td>u16le</td><td>RT_ICON</td><td>Either DIB (<code>BITMAPINFOHEADER</code> + XOR/AND masks) or raw PNG (<code>89 50 4E 47 0D 0A 1A 0A</code>).</td></tr>
+                    <tr><td>6</td><td>2</td><td>u16le</td><td>RT_STRING</td><td>Block of 16 UTF-16LE strings prefixed by <code>u16le</code> character count (ID = <code>(block_id - 1) * 16 + idx</code>).</td></tr>
+                    <tr><td>10</td><td>2</td><td>u16le</td><td>RT_RCDATA</td><td>Arbitrary application-defined raw binary data.</td></tr>
+                    <tr><td>12</td><td>2</td><td>u16le</td><td>RT_GROUP_CURSOR</td><td>Cursor group directory referencing <code>RT_CURSOR</code> IDs.</td></tr>
+                    <tr><td>14</td><td>2</td><td>u16le</td><td>RT_GROUP_ICON</td><td>Icon group directory referencing <code>RT_ICON</code> IDs.</td></tr>
+                    <tr><td>16</td><td>2</td><td>u16le</td><td>RT_VERSION</td><td>Binary <code>VS_VERSIONINFO</code> structure (typically ID <code>1</code>).</td></tr>
+                    <tr><td>24</td><td>2</td><td>u16le</td><td>RT_MANIFEST</td><td>UTF-8 Side-by-Side (SxS) XML manifest (ID <code>1</code> for <code>.exe</code>, <code>2</code> for <code>.dll</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3><code>RT_MANIFEST</code> (Type 24) SxS XML Elements</h3>
+        <ul>
+            <li><strong>Resource IDs:</strong> <code>1</code> = <code>CREATEPROCESS_MANIFEST_RESOURCE_ID</code> (default for <code>.exe</code>), <code>2</code> = <code>ISOLATIONAWARE_MANIFEST_RESOURCE_ID</code> (default for <code>.dll</code>), <code>3</code> = <code>ISOLATIONAWARE_NOSTATICIMPORT_MANIFEST_RESOURCE_ID</code>.</li>
+            <li><strong>Namespaces &amp; Key Elements:</strong> Root <code>&lt;assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"&gt;</code> containing <code>&lt;trustInfo&gt;/&lt;security&gt;/&lt;requestedPrivileges&gt;/&lt;requestedExecutionLevel level="asInvoker|highestAvailable|requireAdministrator"/&gt;</code>, <code>&lt;compatibility&gt;/&lt;application&gt;/&lt;supportedOS Id="{...}"/&gt;</code>, and <code>&lt;application xmlns="urn:schemas-microsoft-com:asm.v3"&gt;/&lt;windowsSettings&gt;</code> (<code>dpiAwareness</code>, <code>longPathAware</code>).</li>
+        </ul>
+
+        <h3>Resource Tree Bit-Masking &amp; Alignment Formulas</h3>
+        <pre><code>is_named   = (entry.NameOrId &amp; 0x80000000) != 0
+name_off   = entry.NameOrId &amp; 0x7FFFFFFF     // relative to .rsrc base
+is_subdir  = (entry.OffsetToData &amp; 0x80000000) != 0
+child_off  = entry.OffsetToData &amp; 0x7FFFFFFF // relative to .rsrc base
+
+// VS_VERSIONINFO 32-bit child alignment:
+align4(x)  = (x + 3) &amp; ~3
+// Version extraction from VS_FIXEDFILEINFO:
+file_ver   = (dwFileVersionMS &gt;&gt; 16, dwFileVersionMS &amp; 0xFFFF,
+              dwFileVersionLS &gt;&gt; 16, dwFileVersionLS &amp; 0xFFFF)</code></pre>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Two Different Offset Bases:</strong> Every pointer inside <code>IMAGE_RESOURCE_DIRECTORY_ENTRY</code> (both name offsets and child directory/data-entry offsets) is relative to the <strong>beginning of the resource directory</strong> (<code>DataDirectory[2].VirtualAddress</code>). Only <code>IMAGE_RESOURCE_DATA_ENTRY.OffsetToData</code> is a full PE <strong>RVA</strong>.</li>
+            <li><strong><code>VS_VERSIONINFO</code> <code>wValueLength</code> Unit Quirk:</strong> In binary nodes (<code>wType == 0</code>, such as root <code>VS_VERSION_INFO</code> and <code>Var</code> translation arrays), <code>wValueLength</code> is in <strong>bytes</strong>. In text <code>String</code> leaf nodes (<code>wType == 1</code>), Microsoft's resource compiler stores <code>wValueLength</code> in <strong>UTF-16 characters</strong> (including the null terminator), so byte length is <code>wValueLength * 2</code>.</li>
+            <li><strong>256&times;256 PNG Icons vs. DIB Icons:</strong> Starting with Windows Vista, <code>RT_ICON</code> entries (especially 256&times;256 where <code>bWidth == 0</code>, <code>bHeight == 0</code>) may hold a complete PNG file rather than a headerless DIB. Always inspect the first 8 bytes of the <code>RT_ICON</code> payload for <code>89 50 4E 47 0D 0A 1A 0A</code> before parsing as <code>BITMAPINFOHEADER</code>.</li>
+            <li><strong>Deeper or Cyclic Resource Trees:</strong> Although standard Win32 tools generate a strict 3-level tree, malformed or obfuscated PEs can contain deeper nesting or self-referential offsets; parsers should enforce a visited-offset set or depth cap.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Complete Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function walk_rsrc_dir(buf: bytes, pe: PEImage, rsrc_off: int, dir_rel: int, depth: int, path: list, out: list):
+    require(depth &lt;= 8, "excessive resource tree depth")
+    d = rsrc_off + dir_rel
+    require(d + 16 &lt;= len(buf), "truncated IMAGE_RESOURCE_DIRECTORY")
+    n_named = u16le(buf, d + 0x0C)
+    n_id    = u16le(buf, d + 0x0E)
+    total   = n_named + n_id
+    entries = d + 16
+    require(entries + total * 8 &lt;= len(buf), "truncated resource entries")
+
+    for i in range(total):
+        e = entries + i * 8
+        name_or_id = u32le(buf, e + 0x00)
+        off_to_data = u32le(buf, e + 0x04)
+
+        if (name_or_id &amp; 0x80000000) != 0:
+            str_off = rsrc_off + (name_or_id &amp; 0x7FFFFFFF)
+            char_len = u16le(buf, str_off)
+            key = buf[str_off + 2 : str_off + 2 + char_len * 2].decode("utf-16-le")
+        else:
+            key = name_or_id &amp; 0xFFFF
+
+        child_rel = off_to_data &amp; 0x7FFFFFFF
+        if (off_to_data &amp; 0x80000000) != 0:
+            walk_rsrc_dir(buf, pe, rsrc_off, child_rel, depth + 1, path + [key], out)
+        else:
+            de = rsrc_off + child_rel
+            require(de + 16 &lt;= len(buf), "truncated IMAGE_RESOURCE_DATA_ENTRY")
+            data_rva  = u32le(buf, de + 0x00)
+            data_size = u32le(buf, de + 0x04)
+            data_off  = rva_to_offset(pe, data_rva)
+            out.append({ path: path + [key], rva: data_rva, offset: data_off, size: data_size })
+
+function parse_vs_fixedfileinfo(payload: bytes) -&gt; dict|null:
+    if len(payload) &lt; 6: return null
+    wLength = u16le(payload, 0x00)
+    wValueLength = u16le(payload, 0x02)
+    wType = u16le(payload, 0x04)
+    pos, key = read_utf16le_z(payload, 0x06)
+    pos = (pos + 3) &amp; ~3
+    if key != "VS_VERSION_INFO" or wValueLength &lt; 52 or pos + 52 &gt; len(payload):
+        return null
+    if u32le(payload, pos) != 0xFEEF04BD:
+        return null
+    return {
+        file_ver:    (u16le(payload, pos+0x0A), u16le(payload, pos+0x08), u16le(payload, pos+0x0E), u16le(payload, pos+0x0C)),
+        product_ver: (u16le(payload, pos+0x12), u16le(payload, pos+0x10), u16le(payload, pos+0x16), u16le(payload, pos+0x14)),
+        file_flags:  u32le(payload, pos + 0x1C) &amp; u32le(payload, pos + 0x18),
+        file_os:     u32le(payload, pos + 0x20),
+        file_type:   u32le(payload, pos + 0x24),
+    }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p><strong>Confirmed Specification:</strong> <code>IMAGE_RESOURCE_DIRECTORY</code>, <code>IMAGE_RESOURCE_DIRECTORY_ENTRY</code>, <code>IMAGE_RESOURCE_DATA_ENTRY</code>, <code>VS_VERSIONINFO</code> / <code>VS_FIXEDFILEINFO</code>, SxS manifests, and <code>GRPICONDIR</code> are specified in Microsoft's PE Format specification and Windows SDK headers (<code>winnt.h</code>, <code>verrsrc.h</code>).</p>
+        <aside class="callout-warn">
+            <p><strong>Tooling &amp; MUI Caveats:</strong> Multilingual User Interface (<code>.mui</code>) binaries redirect localized resources into language-specific satellite DLLs while retaining a <code>MUI</code> custom resource in the main binary. Additionally, <code>VS_VERSIONINFO</code> builders vary on whether <code>wLength</code> of the final child node includes trailing 4-byte padding; parsers should clamp child iteration to the parent node's <code>end = start + wLength</code>.</p>
+        </aside>
+    </section>
+</body>
+</html>

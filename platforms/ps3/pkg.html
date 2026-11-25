@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>.pkg &amp; .rap (PS3 PSN Package &amp; License) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps3" target="_top">PlayStation 3</a><span>/</span><span>.pkg &amp; .rap PSN Package</span>
+    </nav>
+
+    <h1>.pkg &amp; .rap (PS3 PSN Package &amp; License)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">PlayStation 3 Digital Distribution &amp; Activation Format</p>
+        <p>The PS3 <strong><code>.pkg</code></strong> format is Sony's big-endian installation archive for PlayStation Network titles, game patches, DLC, themes, and avatars. It encapsulates a 192-byte header, a big-endian Type-Length-Value (TLV) metadata block, an encrypted file/directory item table with payloads, and an integrity/signature footer. Paid NPDRM packages pair with a 16-byte <strong><code>.rap</code></strong> activation key.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.pkg</code>, <code>&lt;CONTENT_ID&gt;.rap</code> (installed into console <code>exdata/&lt;CONTENT_ID&gt;.rif</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>7F 50 4B 47</code> (<code>0x7F504B47</code>, ASCII <code>"\x7FPKG"</code>) · <code>.rap</code> has no header/magic (raw 16-byte key)</dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian (<code>BE</code>) for all PKG headers, TLV records, and item entries</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 3 XMB Package Installer &amp; PSN Store delivery (<code>pkg_type = 0x0001</code> PS3, <code>0x0002</code> PSP/PSVita)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Encrypted installation archive &amp; 128-bit license key (<code>application/x-ps3-pkg</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">Identification &amp; Scope</a></li>
+            <li><a href="#layout">Binary Layout Tables</a></li>
+            <li><a href="#flags">Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">Parser Pseudocode</a></li>
+            <li><a href="#provenance">Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>A PS3 <code>.pkg</code> archive is recognized by the 4-byte big-endian magic <code>0x7F504B47</code> (<code>"\x7FPKG"</code>). Note that this differs from PlayStation 4 CNT packages (which use <code>0x7F434E54</code>, <code>"\x7FCNT"</code>). All integer fields inside a PS3 <code>.pkg</code>—header offsets, TLV tags, item records, and sizes—are <strong>big-endian</strong>, even though extracted files inside the payload may include little-endian <code>PARAM.SFO</code> metadata.</p>
+        <p>The companion <strong><code>.rap</code></strong> file is a minimal 16-byte (128-bit) license key named <code>&lt;CONTENT_ID&gt;.rap</code>. It carries no header or magic bytes and is transformed by the console's NPDRM activation pipeline (together with <code>act.dat</code> and console IDPS) into a signed <code>.rif</code> file used to unlock NPDRM <code>EBOOT.BIN</code> / <code>.edat</code> content installed from the <code>.pkg</code>.</p>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PS3 .pkg Main Header (192 bytes, offset 0x00..0xBF, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>magic</code></td>
+                        <td>Container signature: <code>0x7F504B47</code> (<code>"\x7FPKG"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>pkg_revision</code></td>
+                        <td>Package status: <code>0x8000</code> = finalized/retail, <code>0x0000</code> = debug.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x06</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>pkg_type</code></td>
+                        <td>Target platform family: <code>0x0001</code> = PS3, <code>0x0002</code> = PSP / PSVita.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>metadata_offset</code></td>
+                        <td>Absolute offset where the metadata TLV block starts (typically <code>0xC0</code> or <code>0x100</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>metadata_count</code></td>
+                        <td>Number of TLV entries in the metadata block.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>metadata_size</code></td>
+                        <td>Total byte length of the metadata TLV block.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>item_count</code></td>
+                        <td>Number of files and directories inside the encrypted item table.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>total_size</code></td>
+                        <td>Total size of the <code>.pkg</code> file in bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>data_offset</code></td>
+                        <td>Absolute offset of the encrypted data region (item records + names + file payloads).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>data_size</code></td>
+                        <td>Byte length of the encrypted data region (from <code>data_offset</code> to footer).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>48</td>
+                        <td><code>char[48]</code></td>
+                        <td><code>content_id</code></td>
+                        <td>NUL-padded 36-character PSN Content ID (e.g., <code>UP0000-NPUB00000_00-EXAMPLE000000000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x60</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>qa_digest</code></td>
+                        <td>QA / content digest (also serves as the key seed for debug <code>.pkg</code> decryption).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x70</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>pkg_data_riv</code></td>
+                        <td>128-bit AES-128-CTR initial counter (RIV) for retail <code>.pkg</code> data decryption.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x80</code></td>
+                        <td>64</td>
+                        <td><code>u8[64]</code></td>
+                        <td><code>header_cmac_digest</code></td>
+                        <td>Header CMAC, NPDRM/SCE verification hashes, and signature fields (<code>0x80..0xBF</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Metadata TLV Record (at <code>metadata_offset</code>, <code>metadata_count</code> records, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>id</code></td>
+                        <td>Metadata tag ID (see Section 3).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>size</code></td>
+                        <td>Byte length of the <code>value</code> payload immediately following.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td><code>size</code></td>
+                        <td><code>u8[size]</code></td>
+                        <td><code>value</code></td>
+                        <td>Big-endian integer, ASCII string, or digest bytes depending on <code>id</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Decrypted Item Record (32 bytes per entry at <code>data_offset</code>, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>name_offset</code></td>
+                        <td>Offset of UTF-8 relative path string, relative to <code>data_offset</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>name_size</code></td>
+                        <td>Byte length of the relative path string (not guaranteed NUL-terminated).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>item_data_offset</code></td>
+                        <td>Offset of file payload bytes, relative to <code>data_offset</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>item_data_size</code></td>
+                        <td>Byte length of file payload (<code>0</code> for directory entries).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>flags</code></td>
+                        <td>Item type, encryption/overwrite flags, and target key index (see Section 3).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>padding</code></td>
+                        <td>Reserved zero padding.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Trailing PKG Footer (typically 96 bytes at <code>data_offset + data_size</code>) &amp; .rap File</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>64</td>
+                        <td><code>u8[64]</code></td>
+                        <td><code>signature_block</code></td>
+                        <td>(PKG Footer) ECDSA/CMAC integrity signature over the package data/header.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x40</code></td>
+                        <td>20</td>
+                        <td><code>u8[20]</code></td>
+                        <td><code>sha1_digest</code></td>
+                        <td>(PKG Footer) Whole-package SHA-1 digest preceding the final 12-byte padding.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x54</code></td>
+                        <td>12</td>
+                        <td><code>u8[12]</code></td>
+                        <td><code>padding</code></td>
+                        <td>(PKG Footer) Trailing zero padding up to <code>total_size</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>rap_key</code></td>
+                        <td>(<code>.rap</code> File) Raw 128-bit license activation key; exact file size is always 16 bytes.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>PKG Type &amp; Revision Modes</h3>
+        <ul>
+            <li><strong><code>pkg_revision &amp; 0x8000</code>:</strong> <code>1</code> = Retail finalized package (encrypted with AES-128-CTR using the platform key + <code>pkg_data_riv</code>); <code>0</code> = Debug/SDK package (encrypted with a custom SHA-1/XOR keystream derived from <code>qa_digest</code>).</li>
+            <li><strong><code>pkg_type</code>:</strong> <code>0x0001</code> = PlayStation 3 (uses PS3 AES-128 key); <code>0x0002</code> = PSP / PS Vita (may switch per-item keys based on <code>flags</code>).</li>
+        </ul>
+
+        <h3>Metadata TLV IDs</h3>
+        <ul>
+            <li><code>0x01</code> = DRM Type (<code>u32be</code>: <code>1</code>=Network, <code>2</code>=Local, <code>3</code>=Free)</li>
+            <li><code>0x02</code> = Content Type (<code>u32be</code>: <code>0x04</code>=GameData/Patch, <code>0x05</code>=GameExec, <code>0x06</code>=PS1/Theme, <code>0x07</code>=Widget, <code>0x09</code>=Theme, <code>0x0C</code>=Avatar, <code>0x15</code>=PSP, etc.)</li>
+            <li><code>0x03</code> = Package Flags (<code>u32be</code>: EULA, Disc-required, Overwrite, etc.)</li>
+            <li><code>0x04</code> = Package Installed Size (<code>u32be</code>/<code>u64be</code>)</li>
+            <li><code>0x05</code> = Make Package Tool Version (<code>u32be</code>) · <code>0x06</code> = App Version / Title Version (<code>u32be</code> BCD)</li>
+            <li><code>0x07</code> = QA Digest (<code>u8[16]</code>) · <code>0x08</code> = System Version (<code>u32be</code>)</li>
+            <li><code>0x0A</code> = Install Directory / SFO Info · <code>0x0B</code> = Package Info / Revision</li>
+        </ul>
+
+        <h3>Item <code>flags</code> Bitmask (<code>+0x18</code>)</h3>
+        <ul>
+            <li><code>flags &amp; 0xFF</code> (Entry Type): <code>0x01</code> = NPDRM SELF, <code>0x02</code> = NPDRM EDAT, <code>0x03</code> = Raw Unprotected File, <code>0x04</code> = Directory, <code>0x0E</code> = SDAT, <code>0x0F</code> = NPDRM SPRX / Config.</li>
+            <li><code>flags &amp; 0x80000000</code>: Overwrite existing file on target installation path.</li>
+            <li><code>(flags &gt;&gt; 28) &amp; 0x07</code>: Key slot selector for PSP/Vita multi-key packages (<code>0</code> = standard PS3 PKG key).</li>
+        </ul>
+
+        <h3>Key Derivation Models</h3>
+        <ul>
+            <li><strong>Retail PS3 Data Stream (AES-128-CTR):</strong> The entire encrypted region <code>[data_offset .. data_offset + data_size)</code> is a single contiguous AES-128-CTR stream keyed with the PS3 retail PKG AES-128 key and initial counter <code>pkg_data_riv</code> (from <code>0x70</code>). Every byte at relative offset <code>rel</code> is decrypted using counter <code>pkg_data_riv + floor(rel / 16)</code>.</li>
+            <li><strong>Debug Data Stream (SHA-1 Keystream):</strong> Debug PKGs construct a 64-byte state block by repeating <code>qa_digest[0..7]</code> and <code>qa_digest[8..15]</code> in alternating 8-byte lanes, hashing each 64-byte state with SHA-1 while incrementing a 64-bit big-endian counter in the final 8 bytes, and XORing the first 16 digest bytes per 16-byte data block.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader / Parser Rules</h2>
+        <ul>
+            <li><strong>Contiguous Stream Decryption:</strong> Item records, item path strings, and item file payloads all live inside the same contiguous encrypted byte range starting at <code>data_offset</code>. Random-access extraction of a single file at relative offset <code>rel</code> must advance the AES-128-CTR counter by <code>rel / 16</code> blocks (never restart at counter 0!).</li>
+            <li><strong>Extended PKG Header (<code>0xC0..0xFF</code>):</strong> Packages built with newer SDKs (especially cross-platform PS3/PSP/Vita PKGs) place an extended header at <code>0xC0</code> starting with magic <code>0x7F657874</code> (<code>"\x7Fext"</code>), pushing <code>metadata_offset</code> to <code>0x100</code> or later. Always seek to <code>metadata_offset</code> rather than hardcoding <code>0xC0</code>.</li>
+            <li><strong>Non-NUL-Terminated Paths:</strong> Item path names are sized explicitly by <code>name_size</code>; slice exact bytes rather than scanning for <code>0x00</code>. Directory entries (<code>(flags &amp; 0xFF) == 0x04</code>) have <code>item_data_size == 0</code> and must be created on disk even when empty.</li>
+            <li><strong><code>.rap</code> vs <code>.rif</code> Activation Model:</strong> A <code>.rap</code> file is portable and contains only the 16-byte raw key; on a PS3, installing it transforms the 16-byte <code>.rap</code> through a fixed permutation + AES key-schedule to recover the <code>klicensee</code>, which is then encrypted using the console's <code>act.dat</code> key and IDPS into a 152-byte <code>.rif</code>.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Parser Pseudocode</h2>
+        <pre><code>function parse_ps3_pkg(stream, retail_pkg_aes_key):
+    magic = read_u32be(stream, 0x00)
+    assert magic == 0x7F504B47  // "\x7FPKG"
+
+    pkg_rev    = read_u16be(stream, 0x04)
+    pkg_type   = read_u16be(stream, 0x06)
+    meta_off   = read_u32be(stream, 0x08)
+    meta_cnt   = read_u32be(stream, 0x0C)
+    meta_sz    = read_u32be(stream, 0x10)
+    item_count = read_u32be(stream, 0x14)
+    total_size = read_u64be(stream, 0x18)
+    data_off   = read_u64be(stream, 0x20)
+    data_sz    = read_u64be(stream, 0x28)
+    content_id = read_ascii_z(stream, 0x30, 48)
+    qa_digest  = read_bytes(stream, 0x60, 16)
+    data_riv   = read_bytes(stream, 0x70, 16)
+
+    // 1. Parse unencrypted Metadata TLV records
+    metadata = {}
+    cur = meta_off
+    for i in 0 .. meta_cnt - 1:
+        tlv_id  = read_u32be(stream, cur + 0x00)
+        tlv_len = read_u32be(stream, cur + 0x04)
+        tlv_val = read_bytes(stream, cur + 0x08, tlv_len)
+        metadata[tlv_id] = tlv_val
+        cur += 8 + tlv_len
+
+    // 2. Helper to decrypt arbitrary slice [rel_off .. rel_off + len) inside data region
+    is_retail = (pkg_rev &amp; 0x8000) != 0
+    function decrypt_data_slice(rel_off, length):
+        enc = read_bytes(stream, data_off + rel_off, length)
+        if is_retail:
+            return aes128_ctr_at_offset(retail_pkg_aes_key, data_riv, rel_off, enc)
+        else:
+            return debug_sha1_xor_at_offset(qa_digest, rel_off, enc)
+
+    // 3. Decrypt and parse Item Record table (item_count * 32 bytes at rel_off = 0)
+    item_table = decrypt_data_slice(0, item_count * 0x20)
+    entries = []
+    for i in 0 .. item_count - 1:
+        base      = i * 0x20
+        name_off  = read_u32be(item_table, base + 0x00)
+        name_sz   = read_u32be(item_table, base + 0x04)
+        d_off     = read_u64be(item_table, base + 0x08)
+        d_sz      = read_u64be(item_table, base + 0x10)
+        flags     = read_u32be(item_table, base + 0x18)
+
+        item_name = decode_utf8(decrypt_data_slice(name_off, name_sz))
+        item_type = flags &amp; 0xFF
+        payload   = (item_type == 0x04) ? null : decrypt_data_slice(d_off, d_sz)
+        entries.append({ name: item_name, type: item_type, flags: flags, data: payload })
+
+    return { content_id: content_id, pkg_type: pkg_type, metadata: metadata, entries: entries }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> The 192-byte main header, TLV metadata encoding, 32-byte item table, debug SHA-1 XOR stream, retail AES-128-CTR stream addressing, and 16-byte <code>.rap</code> structure are completely documented and verified across PS3 retail and debug packages.</li>
+            <li><strong>Revision-Dependent Fields:</strong> Extended headers (<code>0xC0..0xFF</code>) and additional TLV tags (<code>0x0E+</code>) appear in multi-platform (PS3/PSP/Vita) packages and later SDK builders.</li>
+        </ul>
+        <aside class="callout-warn" aria-label="Cryptographic key caveat">
+            <p><strong>Cryptographic Key Caveat:</strong> Sony's retail PS3 PKG AES-128 key, Vita/PSP key tables, ECDSA signing keys, and the static RAP-to-klicensee permutation/AES keys are proprietary and intentionally omitted. Debug packages can be decrypted purely from the public <code>qa_digest</code> at offset <code>0x60</code>; retail decryption requires external key configuration.</p>
+        </aside>
+    </section>
+</body>
+</html>

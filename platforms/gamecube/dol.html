@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GameCube .dol Static Executable — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#gamecube" target="_top">Nintendo GameCube</a>
+        <span>/</span>
+        <span>.dol Static Executable</span>
+    </nav>
+
+    <h1>GameCube Static Executable (<code>.dol</code>)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Platform Executable · Nintendo GameCube / Dolphin OS</p>
+        <p>Flat big-endian PowerPC static executable format containing a fixed 256-byte (<code>0x0100</code>) header defining up to 7 text (code) segments, 11 data segments, a zero-initialized BSS span, and an initial execution entry point.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.dol</code> (commonly <code>boot.dol</code> or <code>main.dol</code> on disc)</dd>
+            <dt>Magic Bytes</dt>
+            <dd>None (identified structurally by valid <code>0x0100</code>-byte header, segment bounds, and PowerPC RAM addresses)</dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian (PowerPC 750CXe)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo GameCube (IPL / Apploader / Dolphin OS; also inherited by Nintendo Wii)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Static boot executable (<code>application/x-gamecube-dol</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Produced by the Dolphin SDK <code>elf2dol</code> tool, a <code>.dol</code> file strips ELF section names, symbol tables, and relocation records into a minimal loadable image. It contains no file magic signature and no internal section names.</p>
+        <ul>
+            <li><strong>Header Size:</strong> Exactly <code>0x0100</code> (256) bytes, always located at file offset <code>0x0000</code>.</li>
+            <li><strong>Segment Capacity:</strong> Fixed array of 7 Text (executable) slots and 11 Data (read-only/initialized) slots, totaling 18 loadable file segments plus 1 contiguous BSS zero-fill descriptor.</li>
+            <li><strong>Endianness:</strong> All header fields and PowerPC instructions/data words are big-endian.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="DOL header layout" tabindex="0">
+            <table class="format-counts">
+                <caption><code>.dol</code> Fixed 256-Byte Header (<code>0x0000</code> &ndash; <code>0x00FF</code>)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td><code>0x1C</code> (28)</td>
+                        <td><code>u32be[7]</code></td>
+                        <td><code>TextOffset[0..6]</code></td>
+                        <td>File offsets (from start of <code>.dol</code>) for Text segments <code>0..6</code>. <code>0</code> if slot unused.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x001C</code></td>
+                        <td><code>0x2C</code> (44)</td>
+                        <td><code>u32be[11]</code></td>
+                        <td><code>DataOffset[0..10]</code></td>
+                        <td>File offsets (from start of <code>.dol</code>) for Data segments <code>0..10</code>. <code>0</code> if slot unused.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0048</code></td>
+                        <td><code>0x1C</code> (28)</td>
+                        <td><code>u32be[7]</code></td>
+                        <td><code>TextAddress[0..6]</code></td>
+                        <td>Virtual RAM load addresses for Text segments <code>0..6</code> (typically <code>0x80003100</code>&ndash;<code>0x817FFFFF</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0064</code></td>
+                        <td><code>0x2C</code> (44)</td>
+                        <td><code>u32be[11]</code></td>
+                        <td><code>DataAddress[0..10]</code></td>
+                        <td>Virtual RAM load addresses for Data segments <code>0..10</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0090</code></td>
+                        <td><code>0x1C</code> (28)</td>
+                        <td><code>u32be[7]</code></td>
+                        <td><code>TextSize[0..6]</code></td>
+                        <td>Byte lengths of Text segments <code>0..6</code>. <code>0</code> if slot unused.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00AC</code></td>
+                        <td><code>0x2C</code> (44)</td>
+                        <td><code>u32be[11]</code></td>
+                        <td><code>DataSize[0..10]</code></td>
+                        <td>Byte lengths of Data segments <code>0..10</code>. <code>0</code> if slot unused.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00D8</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>BssAddress</code></td>
+                        <td>Virtual RAM start address of zero-initialized BSS span (<code>0</code> if none).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00DC</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>BssSize</code></td>
+                        <td>Byte length of BSS span to zero-fill (<code>0</code> if none).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00E0</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>EntryPoint</code></td>
+                        <td>Initial PowerPC execution address (<code>__start</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00E4</code></td>
+                        <td><code>0x1C</code> (28)</td>
+                        <td><code>u8[28]</code></td>
+                        <td><code>Padding</code></td>
+                        <td>Zero-padded reserved bytes up to offset <code>0x0100</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0100</code></td>
+                        <td>variable</td>
+                        <td><code>u8[]</code></td>
+                        <td><code>SegmentPayloads</code></td>
+                        <td>Raw binary payloads for active Text and Data segments referenced by the header offset/size arrays.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>Per-Slot Indexing Formula</h3>
+        <p>Unlike interleaved section tables, <code>.dol</code> stores offsets, load addresses, and sizes in parallel arrays. For Text slot <code>i</code> (<code>0 &lt;= i &lt; 7</code>) and Data slot <code>j</code> (<code>0 &lt;= j &lt; 11</code>):</p>
+        <pre><code>text_offset[i]  = read_u32be(hdr, 0x0000 + i * 4)
+text_addr[i]    = read_u32be(hdr, 0x0048 + i * 4)
+text_size[i]    = read_u32be(hdr, 0x0090 + i * 4)
+
+data_offset[j]  = read_u32be(hdr, 0x001C + j * 4)
+data_addr[j]    = read_u32be(hdr, 0x0064 + j * 4)
+data_size[j]    = read_u32be(hdr, 0x00AC + j * 4)</code></pre>
+
+        <h3>Conventional Dolphin SDK Slot Assignment</h3>
+        <p>The <code>.dol</code> format carries no permission bits beyond the Text vs. Data array split; however, standard Dolphin SDK <code>elf2dol</code> builds map ELF sections in the following order (skipping empty sections or packing sequentially into lower slots):</p>
+        <ul>
+            <li><strong>Text Slots (<code>0..6</code>):</strong> Typically <code>Text[0]</code> = <code>.init</code> (low startup code), <code>Text[1]</code> = <code>.text</code> (main program code); <code>Text[2..6]</code> unused (<code>0</code>).</li>
+            <li><strong>Data Slots (<code>0..10</code>):</strong> Typically assigned across <code>extab</code>, <code>extabindex</code>, <code>.ctors</code>, <code>.dtors</code>, <code>.rodata</code>, <code>.data</code>, <code>.sdata</code>, and <code>.sdata2</code>.</li>
+            <li><strong>BSS Span (<code>0x00D8</code>–<code>0x00DF</code>):</strong> Covers zero-initialized regions (<code>.bss</code>, <code>.sbss</code>, <code>.sbss2</code>) as a single contiguous address span <code>[BssAddress, BssAddress + BssSize)</code>.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Zero-Size &amp; Unused Segment Filtering:</strong> A segment slot is inactive whenever <code>Offset == 0</code> or <code>Size == 0</code>. Some linkers or packers leave stale non-zero values in <code>Address</code> when <code>Size == 0</code>; loaders must filter strictly on <code>Offset != 0 &amp;&amp; Size != 0</code> (while flagging <code>(Offset == 0) != (Size == 0)</code> as malformed).</li>
+            <li><strong>File Bounds &amp; Minimum Offset:</strong> Every active segment must satisfy <code>Offset &gt;= 0x0100</code> and <code>Offset + Size &lt;= file_size</code> (checked without 32-bit integer overflow).</li>
+            <li><strong>BSS Span Overlapping Initialized Data:</strong> Because <code>elf2dol</code> represents all zero-initialized sections as one contiguous span <code>[BssAddress, BssAddress + BssSize)</code>, if the linker places <code>.sdata2</code> (Data segment) between <code>.sbss</code> and <code>.sbss2</code>, the BSS span will enclose <code>.sdata2</code>. Therefore, a loader MUST clear <code>[BssAddress, BssAddress + BssSize)</code> <strong>before</strong> copying initialized Text/Data segments into RAM (or explicitly skip loaded segment ranges if clearing afterward).</li>
+            <li><strong>Segment Overlap Detection:</strong> Reject or warn on two active segments whose file ranges or target RAM ranges overlap each other.</li>
+            <li><strong>RAM Address &amp; Entry Point Validation:</strong> On GameCube, valid cached main RAM addresses fall in <code>0x80000000</code>–<code>0x817FFFFF</code> (above OS globals at <code>0x80003100</code> for normal executables; uncached mirror <code>0xC0000000</code>–<code>0xC17FFFFF</code> is also valid). Verify <code>EntryPoint</code> falls within one of the active Text segments (and is 4-byte aligned, as PowerPC instructions are 32-bit fixed-width).</li>
+            <li><strong>No Relocation Support:</strong> <code>.dol</code> segments are fixed-address; they cannot be relocated to another RAM address without external symbol/relocation metadata.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>struct DolSegment:
+    kind: string        // "text" or "data"
+    slot: int
+    file_offset: u32
+    load_addr: u32
+    size: u32
+    data: bytes
+
+function is_valid_gc_ram(addr, size):
+    if size == 0: return true
+    end_addr = u64(addr) + u64(size)
+    // Cached 24 MiB RAM (0x80000000..0x81800000) or Uncached (0xC0000000..0xC1800000)
+    return (addr &gt;= 0x80000000 and end_addr &lt;= 0x81800000)
+        or (addr &gt;= 0xC0000000 and end_addr &lt;= 0xC1800000)
+
+function parse_dol(stream, file_size):
+    assert file_size &gt;= 0x0100, "File smaller than DOL header"
+    hdr = read_bytes(stream, 0x0000, 0x0100)
+
+    segments = []
+    for kind, count, off_base, addr_base, size_base in [
+        ("text", 7,  0x0000, 0x0048, 0x0090),
+        ("data", 11, 0x001C, 0x0064, 0x00AC)
+    ]:
+        for i in 0 .. count - 1:
+            off  = read_u32be(hdr, off_base  + i * 4)
+            addr = read_u32be(hdr, addr_base + i * 4)
+            size = read_u32be(hdr, size_base + i * 4)
+
+            if off == 0 and size == 0:
+                continue
+            assert off != 0 and size != 0, "Inconsistent empty segment slot"
+            assert off &gt;= 0x0100 and u64(off) + u64(size) &lt;= u64(file_size)
+            assert is_valid_gc_ram(addr, size), "Segment load address outside GC RAM"
+
+            payload = read_bytes(stream, off, size)
+            segments.append(DolSegment(kind, i, off, addr, size, payload))
+
+    // Check pairwise non-overlap in target virtual RAM
+    for a in 0 .. len(segments) - 1:
+        for b in a + 1 .. len(segments) - 1:
+            s1, s2 = segments[a], segments[b]
+            assert (u64(s1.load_addr) + s1.size &lt;= s2.load_addr)
+                or (u64(s2.load_addr) + s2.size &lt;= s1.load_addr), "Overlapping RAM segments"
+
+    bss_addr    = read_u32be(hdr, 0x00D8)
+    bss_size    = read_u32be(hdr, 0x00DC)
+    entry_point = read_u32be(hdr, 0x00E0)
+
+    if bss_size &gt; 0:
+        assert is_valid_gc_ram(bss_addr, bss_size)
+    assert (entry_point &amp; 3) == 0, "Unaligned PowerPC entry point"
+    assert any(s.kind == "text" and entry_point &gt;= s.load_addr and entry_point &lt; s.load_addr + s.size for s in segments)
+
+    return { segments, bss_addr, bss_size, entry_point }
+
+function map_dol_to_memory(parsed_dol, ram):
+    // Step 1: Zero BSS first so enclosed initialized data segments (e.g., .sdata2) are not clobbered
+    if parsed_dol.bss_size &gt; 0:
+        ram.zero(parsed_dol.bss_addr, parsed_dol.bss_size)
+    // Step 2: Copy all active text and data segments
+    for seg in parsed_dol.segments:
+        ram.write(seg.load_addr, seg.data)
+    return parsed_dol.entry_point</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn">
+            <p><strong>Identification caveat:</strong> Because <code>.dol</code> has no magic bytes, arbitrary big-endian files can occasionally mimic a header if only file size is checked. Always validate segment bounds, non-overlap, RAM range, and 4-byte-aligned <code>EntryPoint</code> containment inside a Text segment.</p>
+        </aside>
+        <ul>
+            <li><strong>Confirmed Hardware/SDK Spec:</strong> The 256-byte header layout (7 Text + 11 Data slots, <code>BssAddress</code>, <code>BssSize</code>, <code>EntryPoint</code>) is completely fixed across all GameCube IPL/BS2 revisions and Dolphin SDK toolchains.</li>
+            <li><strong>Linker-Dependent Behavior:</strong> Which logical ELF sections map to which Text/Data indices, and whether <code>BssSize</code> spans <code>.sdata2</code>, depends on the specific linker script (<code>.lcf</code>) used when building the binary.</li>
+        </ul>
+    </section>
+</body>
+</html>

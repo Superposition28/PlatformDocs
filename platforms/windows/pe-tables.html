@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PE Data Directories &amp; Loader Tables — Windows PC</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#windows" target="_top">Windows PC</a><span>/</span><span>PE Data Directories &amp; Tables</span>
+    </nav>
+
+    <h1>PE Data Directories: Imports, Exports, Relocations, TLS, Exceptions &amp; Authenticode</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Executable Sub-Tables · PE32 / PE32+ DataDirectory[0,1,3,4,5,9,13]</p>
+        <p>Binary structures referenced by the PE Optional Header's <code>DataDirectory</code> array to resolve dynamic imports/exports, rebase ASLR images, initialize thread-local storage, unwind exceptions, and verify Authenticode signatures.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd>Embedded inside <code>.exe</code>, <code>.dll</code>, <code>.sys</code>, <code>.ocx</code> (typically in <code>.rdata</code>, <code>.idata</code>, <code>.edata</code>, <code>.pdata</code>, <code>.reloc</code>, <code>.tls</code>, or overlay)</dd>
+            <dt>Magic Bytes</dt>
+            <dd>Located via <code>DataDirectory[index]</code> RVA/Size pairs (<code>DataDirectory[4]</code> uses raw file offset)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (except ASN.1/DER PKCS#7 payload inside Authenticode <code>WIN_CERTIFICATE</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Windows NT PE32 (32-bit) and PE32+ (64-bit x64 / ARM64)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Dynamic linking, relocation, exception unwinding, TLS startup, and code signing metadata</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Each loader table is located by reading <code>{ VirtualAddress, Size }</code> from <code>OptionalHeader.DataDirectory[slot]</code>. For slots <code>0</code>, <code>1</code>, <code>3</code>, <code>5</code>, <code>9</code>, and <code>13</code>, <code>VirtualAddress</code> is an RVA translated through the section table; for slot <code>4</code> (Certificate Table), <code>VirtualAddress</code> is a <strong>raw file offset</strong> outside the virtual memory map.</p>
+        <p>All table headers and array elements are little-endian. Note that Import Lookup Table (ILT) and Import Address Table (IAT) thunks as well as <code>IMAGE_TLS_DIRECTORY</code> pointers are 32-bit in PE32 (<code>0x010B</code>) and 64-bit in PE32+ (<code>0x020B</code>).</p>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="IMAGE_IMPORT_DESCRIPTOR layout" tabindex="0">
+            <table class="format-counts">
+                <caption>DataDir[1] — IMAGE_IMPORT_DESCRIPTOR (20 bytes per DLL; null-terminated by 20 zero bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>+0x00</td><td>4</td><td>u32le</td><td>OriginalFirstThunk</td><td>RVA of Import Lookup Table (ILT); may be <code>0</code> in older toolchains (fall back to <code>FirstThunk</code>).</td></tr>
+                    <tr><td>+0x04</td><td>4</td><td>u32le</td><td>TimeDateStamp</td><td><code>0</code> if unbound; <code>0xFFFFFFFF</code> if new-style bound import; else bound DLL timestamp.</td></tr>
+                    <tr><td>+0x08</td><td>4</td><td>u32le</td><td>ForwarderChain</td><td>Index of first forwarder reference, or <code>0xFFFFFFFF</code> if none.</td></tr>
+                    <tr><td>+0x0C</td><td>4</td><td>u32le</td><td>Name</td><td>RVA of null-terminated ASCII DLL filename (e.g. <code>KERNEL32.dll</code>).</td></tr>
+                    <tr><td>+0x10</td><td>4</td><td>u32le</td><td>FirstThunk</td><td>RVA of Import Address Table (IAT); identical to ILT on disk unless bound, overwritten with VAs at load time.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="IMAGE_IMPORT_BY_NAME and Delay-Load Descriptor" tabindex="0">
+            <table class="format-counts">
+                <caption>DataDir[13] — IMAGE_DELAYLOAD_DESCRIPTOR (32 bytes per DLL; null-terminated)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>+0x00</td><td>4</td><td>u32le</td><td>Attributes</td><td>Bit 0 (<code>1</code> = <code>dlattrRva</code>): fields below are RVAs (standard); <code>0</code> = legacy VAs.</td></tr>
+                    <tr><td>+0x04</td><td>4</td><td>u32le</td><td>DllNameRVA</td><td>RVA of null-terminated ASCII DLL name.</td></tr>
+                    <tr><td>+0x08</td><td>4</td><td>u32le</td><td>ModuleHandleRVA</td><td>RVA of writable <code>HMODULE</code> cache slot in <code>.data</code>.</td></tr>
+                    <tr><td>+0x0C</td><td>4</td><td>u32le</td><td>ImportAddressTableRVA</td><td>RVA of delay-load IAT (initially points to CRT/helper thunks).</td></tr>
+                    <tr><td>+0x10</td><td>4</td><td>u32le</td><td>ImportNameTableRVA</td><td>RVA of delay-load ILT (same thunk format as standard ILT).</td></tr>
+                    <tr><td>+0x14</td><td>4</td><td>u32le</td><td>BoundImportAddressTableRVA</td><td>Optional RVA of bound delay IAT.</td></tr>
+                    <tr><td>+0x18</td><td>4</td><td>u32le</td><td>UnloadInformationTableRVA</td><td>Optional RVA of copy of original delay IAT for <code>__FUnloadDelayLoadedDLL2</code>.</td></tr>
+                    <tr><td>+0x1C</td><td>4</td><td>u32le</td><td>TimeDateStamp</td><td>Timestamp of target DLL when bound, or <code>0</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="IMAGE_EXPORT_DIRECTORY layout" tabindex="0">
+            <table class="format-counts">
+                <caption>DataDir[0] — IMAGE_EXPORT_DIRECTORY (40 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>+0x00</td><td>4</td><td>u32le</td><td>Characteristics</td><td>Reserved; must be <code>0</code>.</td></tr>
+                    <tr><td>+0x04</td><td>4</td><td>u32le</td><td>TimeDateStamp</td><td>Creation timestamp of export data.</td></tr>
+                    <tr><td>+0x08</td><td>2</td><td>u16le</td><td>MajorVersion</td><td>User-defined major version.</td></tr>
+                    <tr><td>+0x0A</td><td>2</td><td>u16le</td><td>MinorVersion</td><td>User-defined minor version.</td></tr>
+                    <tr><td>+0x0C</td><td>4</td><td>u32le</td><td>Name</td><td>RVA of ASCII module name string.</td></tr>
+                    <tr><td>+0x10</td><td>4</td><td>u32le</td><td>Base</td><td>Starting ordinal bias (typically <code>1</code>); <code>Ordinal = Base + Index</code>.</td></tr>
+                    <tr><td>+0x14</td><td>4</td><td>u32le</td><td>NumberOfFunctions</td><td>Entry count in Export Address Table (<code>AddressOfFunctions</code>).</td></tr>
+                    <tr><td>+0x18</td><td>4</td><td>u32le</td><td>NumberOfNames</td><td>Entry count in Name Pointer Table &amp; Ordinal Table.</td></tr>
+                    <tr><td>+0x1C</td><td>4</td><td>u32le</td><td>AddressOfFunctions</td><td>RVA of <code>u32le[NumberOfFunctions]</code> array (code/data RVAs or forwarder string RVAs).</td></tr>
+                    <tr><td>+0x20</td><td>4</td><td>u32le</td><td>AddressOfNames</td><td>RVA of lexicographically sorted <code>u32le[NumberOfNames]</code> ASCII string RVAs.</td></tr>
+                    <tr><td>+0x24</td><td>4</td><td>u32le</td><td>AddressOfNameOrdinals</td><td>RVA of <code>u16le[NumberOfNames]</code> <strong>0-based indices</strong> into <code>AddressOfFunctions</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="IMAGE_BASE_RELOCATION layout" tabindex="0">
+            <table class="format-counts">
+                <caption>DataDir[5] — IMAGE_BASE_RELOCATION Block Header (8 bytes + variable u16le TypeOffset array)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>+0x00</td><td>4</td><td>u32le</td><td>VirtualAddress</td><td>Base RVA of the 4 KiB page to which this block's offsets apply.</td></tr>
+                    <tr><td>+0x04</td><td>4</td><td>u32le</td><td>SizeOfBlock</td><td>Total block byte size including this 8-byte header (4-byte aligned).</td></tr>
+                    <tr><td>+0x08</td><td>SizeOfBlock - 8</td><td>u16le[]</td><td>TypeOffset</td><td>Packed entries: bits <code>15..12</code> = relocation type, bits <code>11..0</code> = page offset.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="IMAGE_TLS_DIRECTORY layout" tabindex="0">
+            <table class="format-counts">
+                <caption>DataDir[9] — IMAGE_TLS_DIRECTORY32 (24 bytes) &amp; IMAGE_TLS_DIRECTORY64 (40 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset (32 / 64)</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>+0x00 / +0x00</td><td>4 / 8</td><td>u32le / u64le</td><td>StartAddressOfRawData</td><td><strong>VA</strong> of initialized TLS template data start.</td></tr>
+                    <tr><td>+0x04 / +0x08</td><td>4 / 8</td><td>u32le / u64le</td><td>EndAddressOfRawData</td><td><strong>VA</strong> of initialized TLS template data end.</td></tr>
+                    <tr><td>+0x08 / +0x10</td><td>4 / 8</td><td>u32le / u64le</td><td>AddressOfIndex</td><td><strong>VA</strong> of writable <code>u32le</code> slot receiving the OS TLS index.</td></tr>
+                    <tr><td>+0x0C / +0x18</td><td>4 / 8</td><td>u32le / u64le</td><td>AddressOfCallBacks</td><td><strong>VA</strong> of null-terminated array of <code>PIMAGE_TLS_CALLBACK</code> VAs (or <code>0</code>).</td></tr>
+                    <tr><td>+0x10 / +0x20</td><td>4</td><td>u32le</td><td>SizeOfZeroFill</td><td>Trailing zero-initialized TLS bytes beyond <code>End - Start</code>.</td></tr>
+                    <tr><td>+0x14 / +0x24</td><td>4</td><td>u32le</td><td>Characteristics</td><td>Bits <code>23..20</code> encode alignment power-of-2; remaining bits reserved.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="RUNTIME_FUNCTION and WIN_CERTIFICATE" tabindex="0">
+            <table class="format-counts">
+                <caption>DataDir[3] (.pdata RUNTIME_FUNCTION) &amp; DataDir[4] (Authenticode WIN_CERTIFICATE)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>x64 +0x00</td><td>4</td><td>u32le</td><td>BeginAddress</td><td>RVA of function start in code section.</td></tr>
+                    <tr><td>x64 +0x04</td><td>4</td><td>u32le</td><td>EndAddress</td><td>RVA of function end (exclusive).</td></tr>
+                    <tr><td>x64 +0x08</td><td>4</td><td>u32le</td><td>UnwindInfoAddress</td><td>RVA of <code>UNWIND_INFO</code> structure in <code>.xdata</code> / <code>.rdata</code>.</td></tr>
+                    <tr><td>ARM64 +0x00</td><td>4</td><td>u32le</td><td>BeginAddress</td><td>RVA of ARM64 function start.</td></tr>
+                    <tr><td>ARM64 +0x04</td><td>4</td><td>u32le</td><td>UnwindData</td><td>If bits <code>1..0 == 0</code>, RVA of <code>.xdata</code> record; else packed unwind word.</td></tr>
+                    <tr><td>Cert +0x00</td><td>4</td><td>u32le</td><td>dwLength</td><td>Byte length of <code>WIN_CERTIFICATE</code> structure (including 8-byte header).</td></tr>
+                    <tr><td>Cert +0x04</td><td>2</td><td>u16le</td><td>wRevision</td><td><code>0x0100</code> (WIN_CERT_REVISION_1_0) or <code>0x0200</code> (WIN_CERT_REVISION_2_0).</td></tr>
+                    <tr><td>Cert +0x06</td><td>2</td><td>u16le</td><td>wCertificateType</td><td><code>0x0002</code> = <code>WIN_CERT_TYPE_PKCS_SIGNED_DATA</code> (Authenticode); <code>0x0001</code> = X.509.</td></tr>
+                    <tr><td>Cert +0x08</td><td>dwLength - 8</td><td>u8[]</td><td>bCertificate</td><td>DER-encoded PKCS#7 <code>SignedData</code> carrying <code>SpcIndirectDataContent</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>Import Lookup Table (ILT) Ordinal vs. Name Bit</h3>
+        <div class="table-scroll" role="region" aria-label="ILT thunk decoding" tabindex="0">
+            <table class="format-counts">
+                <caption>IMAGE_THUNK_DATA32 (PE32) &amp; IMAGE_THUNK_DATA64 (PE32+) Decoding</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Format</th>
+                        <th scope="col">Width</th>
+                        <th scope="col">Ordinal Flag Mask</th>
+                        <th scope="col">Value Extraction</th>
+                        <th scope="col">Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>PE32 (<code>0x010B</code>)</td><td><code>u32le</code></td><td>Bit 31 (<code>0x80000000</code>)</td><td><code>entry &amp; 0xFFFF</code> (if flag=1) / <code>entry &amp; 0x7FFFFFFF</code> (if flag=0)</td><td>Flag <code>1</code>: import by 16-bit ordinal; Flag <code>0</code>: RVA to <code>IMAGE_IMPORT_BY_NAME { u16le Hint; ascii Name }</code>.</td></tr>
+                    <tr><td>PE32+ (<code>0x020B</code>)</td><td><code>u64le</code></td><td>Bit 63 (<code>0x8000000000000000</code>)</td><td><code>entry &amp; 0xFFFF</code> (if flag=1) / <code>entry &amp; 0x7FFFFFFF</code> (if flag=0)</td><td>Flag <code>1</code>: import by 16-bit ordinal; Flag <code>0</code>: RVA to <code>IMAGE_IMPORT_BY_NAME</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Base Relocation Block Types" tabindex="0">
+            <table class="format-counts">
+                <caption>Base Relocation Types (Top 4 bits of u16le TypeOffset: type = entry &gt;&gt; 12, offset = entry &amp; 0x0FFF)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Type ID</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Constant</th>
+                        <th scope="col">Patch Action at RVA = Block.VirtualAddress + offset</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0</td><td>0</td><td>nop</td><td>IMAGE_REL_BASED_ABSOLUTE</td><td>Padding / skipped (used to align block size to 4 bytes).</td></tr>
+                    <tr><td>1</td><td>2</td><td>u16le</td><td>IMAGE_REL_BASED_HIGH</td><td>Add high 16 bits of 32-bit delta: <code>*(u16*)p += (delta &gt;&gt; 16) &amp; 0xFFFF</code>.</td></tr>
+                    <tr><td>2</td><td>2</td><td>u16le</td><td>IMAGE_REL_BASED_LOW</td><td>Add low 16 bits of 32-bit delta: <code>*(u16*)p += delta &amp; 0xFFFF</code>.</td></tr>
+                    <tr><td>3</td><td>4</td><td>u32le</td><td>IMAGE_REL_BASED_HIGHLOW</td><td>Add full 32-bit delta (PE32 x86): <code>*(u32*)p += delta</code>.</td></tr>
+                    <tr><td>4</td><td>4</td><td>u16le + param</td><td>IMAGE_REL_BASED_HIGHADJ</td><td>Consumes next 16-bit slot as low half for 32-bit split address fixup.</td></tr>
+                    <tr><td>7</td><td>4/8</td><td>ARM Thumb-2</td><td>IMAGE_REL_BASED_THUMB_MOV32</td><td>Relocate 32-bit address encoded across <code>MOVW</code>/<code>MOVT</code> pair.</td></tr>
+                    <tr><td>10</td><td>8</td><td>u64le</td><td>IMAGE_REL_BASED_DIR64</td><td>Add full 64-bit delta (PE32+ x64 / ARM64): <code>*(u64*)p += delta</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Forwarded Exports:</strong> In <code>AddressOfFunctions[i]</code>, if <code>export_rva</code> falls strictly inside <code>[DataDir[0].VirtualAddress, DataDir[0].VirtualAddress + DataDir[0].Size)</code>, the entry is not code — it is an RVA to a null-terminated ASCII forwarder string (e.g. <code>"KERNELBASE.CreateFileW"</code> or <code>"NTDLL.#42"</code>).</li>
+            <li><strong>Ordinal-Only Exports:</strong> <code>NumberOfFunctions</code> can exceed <code>NumberOfNames</code>, and slots in <code>AddressOfFunctions</code> can be <code>0</code> (unused ordinal gaps). Only exports present in <code>AddressOfNameOrdinals</code> have symbolic names.</li>
+            <li><strong>Authenticode Raw File Offset Quirk:</strong> Unlike all other data directories, <code>DataDirectory[4].VirtualAddress</code> is an absolute file offset, not an RVA. Multiple stacked certificates inside <code>DataDirectory[4]</code> must be iterated by advancing <code>align_up(dwLength, 8)</code> until <code>DataDirectory[4].Size</code> is exhausted. Authenticode hashing excludes the 4-byte PE <code>CheckSum</code>, the 8-byte <code>DataDirectory[4]</code> slot, and the certificate table bytes.</li>
+            <li><strong>TLS Callback Array Termination:</strong> TLS directories store full VAs rather than RVAs, so parsers must subtract <code>ImageBase</code> (and apply relocations if rebased) before RVA lookup. Empty callback arrays either have <code>AddressOfCallBacks == 0</code> or point directly to a <code>0</code> pointer sentinel.</li>
+            <li><strong>Generalized Loader Scope:</strong> Only static directory structures and generalized Win32/Win64 resolution semantics are described; runtime API Set schema tables (<code>apisetschema.dll</code>) and kernel-mode Driver Signing enforcement details vary by OS build.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Complete Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function parse_imports(buf: bytes, pe: PEImage) -&gt; list:
+    dd = pe.data_dirs[1]
+    if dd.VirtualAddress == 0: return []
+    off = rva_to_offset(pe, dd.VirtualAddress)
+    imports = []
+    while off + 20 &lt;= len(buf):
+        ilt_rva  = u32le(buf, off + 0x00)
+        name_rva = u32le(buf, off + 0x0C)
+        iat_rva  = u32le(buf, off + 0x10)
+        if ilt_rva == 0 and name_rva == 0 and iat_rva == 0:
+            break
+        dll_name = read_cstr(buf, rva_to_offset(pe, name_rva))
+        thunk_rva = (ilt_rva != 0) ? ilt_rva : iat_rva
+        thunk_off = rva_to_offset(pe, thunk_rva)
+        step = pe.is_pe32_plus ? 8 : 4
+        ord_flag = pe.is_pe32_plus ? (1 &lt;&lt; 63) : (1 &lt;&lt; 31)
+        syms = []
+        while true:
+            val = pe.is_pe32_plus ? u64le(buf, thunk_off) : u32le(buf, thunk_off)
+            if val == 0: break
+            if (val &amp; ord_flag) != 0:
+                syms.append({ ordinal: val &amp; 0xFFFF })
+            else:
+                hint_off = rva_to_offset(pe, val &amp; 0x7FFFFFFF)
+                syms.append({ hint: u16le(buf, hint_off), name: read_cstr(buf, hint_off + 2) })
+            thunk_off += step
+        imports.append({ dll: dll_name, symbols: syms })
+        off += 20
+    return imports
+
+function parse_exports(buf: bytes, pe: PEImage) -&gt; list:
+    dd = pe.data_dirs[0]
+    if dd.VirtualAddress == 0: return []
+    ed = rva_to_offset(pe, dd.VirtualAddress)
+    base    = u32le(buf, ed + 0x10)
+    n_funcs = u32le(buf, ed + 0x14)
+    n_names = u32le(buf, ed + 0x18)
+    eat_off = rva_to_offset(pe, u32le(buf, ed + 0x1C))
+    ent_off = rva_to_offset(pe, u32le(buf, ed + 0x20))
+    eot_off = rva_to_offset(pe, u32le(buf, ed + 0x24))
+
+    name_by_idx = {}
+    for i in range(n_names):
+        idx = u16le(buf, eot_off + i * 2)
+        name_rva = u32le(buf, ent_off + i * 4)
+        name_by_idx[idx] = read_cstr(buf, rva_to_offset(pe, name_rva))
+
+    exports = []
+    for idx in range(n_funcs):
+        func_rva = u32le(buf, eat_off + idx * 4)
+        if func_rva == 0: continue
+        is_fwd = (dd.VirtualAddress &lt;= func_rva &lt; dd.VirtualAddress + dd.Size)
+        exports.append({
+            ordinal:   base + idx,
+            name:      name_by_idx.get(idx, null),
+            rva:       is_fwd ? null : func_rva,
+            forwarder: is_fwd ? read_cstr(buf, rva_to_offset(pe, func_rva)) : null,
+        })
+    return exports</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p><strong>Confirmed Specification:</strong> Import/Export descriptors, Base Relocations, TLS directories, x64/ARM64 <code>RUNTIME_FUNCTION</code> records, and <code>WIN_CERTIFICATE</code> headers are documented in Microsoft's PE Format specification, x64/ARM64 ABI documentation, and Authenticode PE Signing Specification.</p>
+        <aside class="callout-warn">
+            <p><strong>Platform &amp; Crypto Caveats:</strong> Modern Windows executables may carry dual SHA-1 + SHA-256 nested signatures inside a single <code>WIN_CERTIFICATE</code> PKCS#7 blob (<code>szOID_NESTED_SIGNATURE</code>) and page-hash tables for fast validation. Full X.509/PKCS#7 trust verification depends on the Windows Root Certificate store and time-stamping authorities rather than header structure alone.</p>
+        </aside>
+    </section>
+</body>
+</html>

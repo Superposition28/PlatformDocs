@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TROPHY.TRP (PS3 Trophy Archive Container) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps3" target="_top">PlayStation 3</a><span>/</span><span>TROPHY.TRP</span>
+    </nav>
+
+    <h1>TROPHY.TRP (PS3 Trophy Archive Container)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">PlayStation 3 Trophy Configuration &amp; Asset Archive</p>
+        <p><strong><code>TROPHY.TRP</code></strong> is the big-endian flat archive container used by the PlayStation 3 system software to bundle trophy definitions (<code>TROPCONF.SFM</code>), localized trophy text (<code>TROP.SFM</code> / <code>TROP_XX.SFM</code>), and PNG trophy/set icons (<code>ICON0.PNG</code>, <code>TROP###.PNG</code>, <code>GR####.PNG</code>). Revisions v1 through v3 share a 64-byte header and 64-byte entry records while progressively adding SHA-1 whole-archive integrity and entry-level encryption flags.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>PS3_GAME/TROPDIR/NPWR#####_00/TROPHY.TRP</code> (or HDD <code>/dev_hdd0/home/&lt;user&gt;/trophy/NPWR#####_00/TROPHY.TRP</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>DC A2 4D 00</code> (<code>0xDCA24D00</code> big-endian)</dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian (<code>BE</code>) for TRP header and 64-byte entry table; embedded <code>.SFM</code> files are UTF-8 XML</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 3 XMB Trophy System &amp; CellOS <code>cellSysutilTrophy</code> (format versions 1, 2, and 3)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Trophy metadata &amp; icon archive (<code>application/x-ps3-trp</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">Identification &amp; Scope</a></li>
+            <li><a href="#layout">Binary Layout Tables</a></li>
+            <li><a href="#flags">Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">Parser Pseudocode</a></li>
+            <li><a href="#provenance">Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Every PlayStation 3 trophy archive starts with the 4-byte big-endian magic <code>0xDCA24D00</code> (bytes <code>DC A2 4D 00</code>, non-ASCII). All numeric fields in the 64-byte header and the contiguous 64-byte entry directory are <strong>big-endian</strong>. Each title's trophy set is identified by its 12-character NP communication ID (<code>NPWR#####_00</code>) matching <code>NP_COMMUNICATION_ID</code> in <code>PARAM.SFO</code>.</p>
+        <p>Inside the archive, <code>.SFM</code> members are plain UTF-8 XML documents (<code>TROPCONF.SFM</code> for structural definitions and <code>TROP.SFM</code> / <code>TROP_XX.SFM</code> for localized strings), accompanied by standard PNG images (<code>ICON0.PNG</code> and <code>TROP###.PNG</code>).</p>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>TROPHY.TRP Header (64 bytes, offset 0x00..0x3F, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>magic</code></td>
+                        <td>Container signature: <code>0xDCA24D00</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>version</code></td>
+                        <td>Archive format version: <code>1</code>, <code>2</code>, or <code>3</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>file_size</code></td>
+                        <td>Total size of the <code>TROPHY.TRP</code> archive in bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>entry_count</code></td>
+                        <td>Number of 64-byte file entry records starting at <code>0x40</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>entry_size</code></td>
+                        <td>Byte size of each entry record (always <code>0x40</code> = 64 bytes).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>dev_flag</code></td>
+                        <td>Development/mode flag (<code>0</code> = standard retail, <code>1</code> = dev/special; zero padding in v1).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>20</td>
+                        <td><code>u8[20]</code></td>
+                        <td><code>sha1_digest</code></td>
+                        <td>(v2 &amp; v3) Whole-file SHA-1 digest with bytes <code>0x1C..0x2F</code> zeroed; zeroed in v1.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>padding</code></td>
+                        <td>Reserved zero padding (<code>0x00</code>) up to <code>0x40</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>TRP File Entry Record (64 bytes per entry starting at 0x40, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>32</td>
+                        <td><code>char[32]</code></td>
+                        <td><code>name</code></td>
+                        <td>NUL-padded ASCII filename (max 31 chars + NUL, e.g., <code>"TROPCONF.SFM"</code>, <code>"TROP000.PNG"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>offset</code></td>
+                        <td>Absolute byte offset of the member file payload from start of <code>TROPHY.TRP</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>size</code></td>
+                        <td>Byte length of the member file payload.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>flags</code></td>
+                        <td>Entry flags: <code>0</code> = plaintext/unencrypted; non-zero (e.g., <code>1</code> or <code>3</code> in v3) marks special/encrypted entry handling.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x34</code></td>
+                        <td>12</td>
+                        <td><code>u8[12]</code></td>
+                        <td><code>padding</code></td>
+                        <td>Reserved zero padding.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Standard Embedded Member Files</caption>
+                <thead>
+                    <tr>
+                        <th>Filename</th>
+                        <th>Format</th>
+                        <th>Typical Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>TROPCONF.SFM</code></td>
+                        <td>UTF-8 XML</td>
+                        <td>Master configuration: <code>&lt;trophyconf&gt;</code>, <code>&lt;npcommid&gt;</code>, <code>&lt;trophyset-version&gt;</code>, <code>&lt;trophy id="000" hidden="..." ttype="P|G|S|B" pid="..."&gt;</code>, and optional <code>&lt;group&gt;</code> nodes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>TROP.SFM</code></td>
+                        <td>UTF-8 XML</td>
+                        <td>Default/fallback localized names (<code>&lt;name&gt;</code>) and descriptions (<code>&lt;detail&gt;</code>) for the trophy set and each trophy ID.</td>
+                    </tr>
+                    <tr>
+                        <td><code>TROP_XX.SFM</code></td>
+                        <td>UTF-8 XML</td>
+                        <td>Language-specific localization files where <code>XX</code> is a 2-digit CellOS language code (<code>00</code>=JP, <code>01</code>=EN-US, <code>02</code>=FR, <code>03</code>=ES, <code>04</code>=DE, <code>05</code>=IT, etc.).</td>
+                    </tr>
+                    <tr>
+                        <td><code>ICON0.PNG</code></td>
+                        <td>PNG (320×176)</td>
+                        <td>Trophy set title banner displayed in the XMB Trophy Collection.</td>
+                    </tr>
+                    <tr>
+                        <td><code>TROP###.PNG</code></td>
+                        <td>PNG (240×240)</td>
+                        <td>Per-trophy icon matching zero-padded 3-digit <code>id</code> (<code>TROP000.PNG</code> .. <code>TROP999.PNG</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>GR####.PNG</code></td>
+                        <td>PNG (320×176)</td>
+                        <td>Optional per-group banner for base game / DLC trophy groups (<code>GR0001.PNG</code>, etc.).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+        <ul>
+            <li><strong>Header <code>version</code> Evolution (v1 / v2 / v3):</strong>
+                <ul>
+                    <li><strong>Version 1:</strong> No header SHA-1 digest (bytes <code>0x18..0x3F</code> are zeroed); all entry <code>flags</code> are <code>0</code> (plaintext).</li>
+                    <li><strong>Version 2:</strong> Introduces the 20-byte whole-archive <code>sha1_digest</code> at <code>0x1C..0x2F</code> (and <code>dev_flag</code> at <code>0x18</code>).</li>
+                    <li><strong>Version 3:</strong> Retains the <code>0x1C</code> SHA-1 digest and adds support for non-zero entry <code>flags</code> (including AES-128-CBC encrypted <code>.SFM</code>/<code>.PNG</code> payloads on systems/SDKs using TRP v3 entry encryption).</li>
+                </ul>
+            </li>
+            <li><strong>Entry <code>flags</code> (<code>+0x30</code>):</strong>
+                <ul>
+                    <li><code>0x00000000</code>: Standard unencrypted file payload (directly readable as XML or PNG).</li>
+                    <li><code>0x00000001</code> / <code>0x00000003</code> (v3): Encrypted or protected payload (typically AES-128-CBC with first 16 bytes serving as IV and PKCS#7-like padding in v3 encrypted entries).</li>
+                </ul>
+            </li>
+            <li><strong><code>TROPCONF.SFM</code> Trophy Grades (<code>ttype</code>):</strong> <code>P</code> = Platinum, <code>G</code> = Gold, <code>S</code> = Silver, <code>B</code> = Bronze; <code>hidden="yes"|"no"</code> controls pre-unlock visibility; <code>pid</code> binds DLC trophies to base/group indices.</li>
+            <li><strong>SHA-1 Integrity Formula (<code>version &gt;= 2</code>):</strong>
+                <br><code>computed_sha1 = SHA1(file[0x00..0x1C] || zeros(20) || file[0x30..file_size])</code>
+                <br>Valid when <code>computed_sha1 == file[0x1C..0x30]</code>.
+            </li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader / Parser Rules</h2>
+        <ul>
+            <li><strong>Entry Stride Respect:</strong> Always advance entry table reads by <code>entry_size</code> (at <code>0x14</code>) rather than hardcoding <code>64</code>, and assert <code>entry_size &gt;= 0x34</code>.</li>
+            <li><strong>Data Alignment &amp; Bounds:</strong> Member offsets typically align to 16 or 64 bytes after <code>0x40 + entry_count * entry_size</code>. Validate <code>offset + size &lt;= file_size</code> and <code>offset &gt;= 0x40 + entry_count * entry_size</code> before reading any member payload.</li>
+            <li><strong>Encrypted v3 Payloads vs Plaintext PS3 Payloads:</strong> Most PS3 retail disc/PSN <code>TROPHY.TRP</code> files store <code>flags == 0</code> (plaintext) even under header v2; however, when encountering <code>version == 3</code> with non-zero <code>flags</code> (notably <code>flags == 3</code>), a naive parser must not feed raw ciphertext to XML/PNG decoders—check PNG signature (<code>89 50 4E 47</code>) or XML prolog (<code>&lt;?xml</code>) if decrypting without prior flag inspection.</li>
+            <li><strong>Language Code Resolution:</strong> If a matching <code>TROP_XX.SFM</code> is absent for the active CellOS language index, the system falls back to <code>TROP.SFM</code>.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Parser Pseudocode</h2>
+        <pre><code>function parse_trophy_trp(stream, verify_hash = true, trp_aes_key = null):
+    magic = read_u32be(stream, 0x00)
+    assert magic == 0xDCA24D00
+
+    version     = read_u32be(stream, 0x04)
+    file_size   = read_u64be(stream, 0x08)
+    entry_count = read_u32be(stream, 0x10)
+    entry_size  = read_u32be(stream, 0x14)
+    dev_flag    = read_u32be(stream, 0x18)
+    stored_sha1 = read_bytes(stream, 0x1C, 20)
+
+    assert version in (1, 2, 3)
+    assert entry_size &gt;= 0x34
+    assert actual_file_size(stream) &gt;= file_size
+
+    if verify_hash and version &gt;= 2:
+        buf = read_bytes(stream, 0x00, file_size)
+        buf[0x1C .. 0x30] = zeros(20)
+        assert sha1(buf) == stored_sha1
+
+    table_end = 0x40 + entry_count * entry_size
+    entries = []
+    for i in 0 .. entry_count - 1:
+        base    = 0x40 + i * entry_size
+        name    = decode_ascii(split_at_first_nul(read_bytes(stream, base + 0x00, 32)))
+        offset  = read_u64be(stream, base + 0x20)
+        size    = read_u64be(stream, base + 0x28)
+        flags   = read_u32be(stream, base + 0x30)
+
+        assert offset &gt;= table_end and offset + size &lt;= file_size
+        payload = read_bytes(stream, offset, size)
+
+        if flags != 0:
+            assert trp_aes_key != null  // v3 encrypted entry (flags == 3 / encrypted)
+            iv = payload[0x00 .. 0x10]
+            payload = aes128_cbc_decrypt_pkcs7(trp_aes_key, iv, payload[0x10 .. size])
+
+        entries.append({ name: name, offset: offset, size: size, flags: flags, data: payload })
+
+    return { version: version, dev_flag: dev_flag, entries: entries }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> The 64-byte TRP header, 64-byte entry layout, <code>0xDCA24D00</code> magic, v2/v3 SHA-1 verification over a zeroed <code>0x1C..0x2F</code> digest field, and <code>TROPCONF.SFM</code> / <code>TROP*.SFM</code> XML schemas are fully confirmed across PS3 retail releases.</li>
+            <li><strong>Revision-Dependent Fields:</strong> Entry-level encryption under <code>version == 3</code> (non-zero <code>flags</code>) is primarily observed in later SDK/cross-generation trophy archives, whereas the majority of PS3-era <code>TROPHY.TRP</code> archives use v1 or v2 with <code>flags == 0</code>.</li>
+        </ul>
+        <aside class="callout-warn" aria-label="Trophy key caveat">
+            <p><strong>Cryptographic Key Caveat:</strong> For TRP v3 archives that set per-entry encryption flags, the AES-128 Trophy key is proprietary and omitted from this specification. Unencrypted v1/v2 archives and header/entry metadata remain directly inspectable without keys.</p>
+        </aside>
+    </section>
+</body>
+</html>

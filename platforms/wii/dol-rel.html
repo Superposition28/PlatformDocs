@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wii .dol / .rel Executables &amp; Loader Model — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#wii" target="_top">Nintendo Wii</a>
+        <span>/</span>
+        <span>.dol / .rel Executables &amp; Loader Model</span>
+    </nav>
+
+    <h1>Wii .dol / .rel Executables &amp; IOS/MEM1/MEM2 Loader Model</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Executable &amp; Dynamic Module Formats · Route <code>#wii-dol-rel</code></p>
+        <p>Big-endian PowerPC static executable (<code>.dol</code>) and relocatable dynamic module (<code>.rel</code>) containers inherited from GameCube and extended on Wii to span MEM1, MEM2, and Starlet/IOS low-memory boot globals.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>main.dol</code> (or disc/NAND boot content <code>*.app</code>), <code>*.rel</code> (relocatable modules)</dd>
+            <dt>Magic Bytes</dt>
+            <dd>None (<code>.dol</code> starts directly with <code>u32be TextOffset[7]</code> at <code>0x00</code>; <code>.rel</code> starts with <code>u32be ModuleId</code> and has <code>Version == 3</code> at <code>0x1C</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian (PowerPC 750CL &ldquo;Broadway&rdquo; native byte order)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo Wii Revolution SDK (<code>OS</code> / <code>OSLink</code>), apploader, and Starlet IOS boot initialization</dd>
+            <dt>Role/MIME</dt>
+            <dd>Static PowerPC binary image (<code>application/x-wii-dol</code>) and dynamically linked module (<code>application/x-wii-rel</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Wii Broadway executables retain the GameCube binary container formats while expanding the target virtual memory space from 24 MiB (MEM1) to 88 MiB (MEM1 + MEM2) under Starlet/IOS supervision:</p>
+        <ul>
+            <li><strong><code>.dol</code> (Static Executable):</strong> A <code>0x100</code>-byte (256-byte) header describing up to 7 executable text sections and 11 initialized data sections, one contiguous BSS region, and a virtual entry point. There is no magic signature; structural validation checks that section offsets are <code>&gt;= 0x100</code>, section ranges remain in bounds, and load addresses fall within valid MEM1/MEM2 virtual space.</li>
+            <li><strong><code>.rel</code> (Relocatable Module):</strong> A dynamically loaded PowerPC module linked at runtime via the SDK's <code>OSLink</code> loader. Wii builds predominantly emit <code>.rel</code> format <strong>version 3</strong> (<code>0x00000003</code> at <code>0x1C</code>), adding <code>fixSize</code> at <code>0x48</code>.</li>
+            <li><strong>Scope Note:</strong> This specification covers container headers, section tables, import/relocation encodings, and generalized IOS/MEM1/MEM2 boot loader mapping; application-specific code/data payloads are excluded.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="DOL header layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.1 — .dol Executable Header (0x00–0xFF, 256 Bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>28</td>
+                        <td><code>u32be[7]</code></td>
+                        <td><code>TextOffsets</code></td>
+                        <td>File offsets of text sections 0..6 (<code>0</code> indicates unused slot).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>44</td>
+                        <td><code>u32be[11]</code></td>
+                        <td><code>DataOffsets</code></td>
+                        <td>File offsets of data sections 0..10 (<code>0</code> indicates unused slot).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x48</code></td>
+                        <td>28</td>
+                        <td><code>u32be[7]</code></td>
+                        <td><code>TextAddresses</code></td>
+                        <td>Target PowerPC virtual load addresses for text sections 0..6 (MEM1/MEM2).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x64</code></td>
+                        <td>44</td>
+                        <td><code>u32be[11]</code></td>
+                        <td><code>DataAddresses</code></td>
+                        <td>Target PowerPC virtual load addresses for data sections 0..10 (MEM1/MEM2).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x90</code></td>
+                        <td>28</td>
+                        <td><code>u32be[7]</code></td>
+                        <td><code>TextSizes</code></td>
+                        <td>Byte lengths of text sections 0..6 (<code>0</code> if unused).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xAC</code></td>
+                        <td>44</td>
+                        <td><code>u32be[11]</code></td>
+                        <td><code>DataSizes</code></td>
+                        <td>Byte lengths of data sections 0..10 (<code>0</code> if unused).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xD8</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>BssAddress</code></td>
+                        <td>Virtual base address of zero-initialized BSS region (<code>0</code> if none).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xDC</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>BssSize</code></td>
+                        <td>Byte length of BSS region to zero-fill (<code>0</code> if none).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xE0</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>EntryPoint</code></td>
+                        <td>Initial PowerPC virtual PC address (typically in MEM1, e.g. <code>0x80003100</code> or <code>0x80004000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xE4</code></td>
+                        <td>28</td>
+                        <td><code>u8[28]</code></td>
+                        <td><code>Padding</code></td>
+                        <td>Unused zero bytes to <code>0x100</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="REL header layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.2 — .rel Module Header (v1–v3, 0x00–0x4B)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>ModuleId</code></td>
+                        <td>Unique module ID (<code>0</code> reserved for main static <code>.dol</code>; <code>&gt; 0</code> for <code>.rel</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Next</code></td>
+                        <td>Runtime linked-list forward pointer (<code>0</code> on disk).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Prev</code></td>
+                        <td>Runtime linked-list backward pointer (<code>0</code> on disk).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>NumSections</code></td>
+                        <td>Number of 8-byte section descriptors at <code>SectionInfoOffset</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>SectionInfoOffset</code></td>
+                        <td>File offset of the Section Info table.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>NameOffset</code></td>
+                        <td>File/string offset of module name (<code>0</code> if stripped).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>NameSize</code></td>
+                        <td>Length of module name string in bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Version</code></td>
+                        <td>REL format version (<code>1</code>, <code>2</code>, or <code>3</code>; Wii SDK emits <code>3</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>BssSize</code></td>
+                        <td>Total BSS byte allocation required by this module.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x24</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>RelOffset</code></td>
+                        <td>File offset of the relocation data block.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>ImpOffset</code></td>
+                        <td>File offset of the Import table.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>ImpSize</code></td>
+                        <td>Import table size in bytes (<code>ImpSize / 8</code> entries).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>PrologSection</code></td>
+                        <td>Section index containing <code>_prolog</code> entry (<code>0</code> = none).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x31</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>EpilogSection</code></td>
+                        <td>Section index containing <code>_epilog</code> exit (<code>0</code> = none).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x32</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>UnresolvedSection</code></td>
+                        <td>Section index containing <code>_unresolved</code> stub handler (<code>0</code> = none).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x33</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>BssSection</code></td>
+                        <td>Runtime-assigned BSS section index (<code>0</code> on disk).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x34</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>PrologOffset</code></td>
+                        <td>Byte offset of <code>_prolog</code> within <code>PrologSection</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x38</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>EpilogOffset</code></td>
+                        <td>Byte offset of <code>_epilog</code> within <code>EpilogSection</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x3C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>UnresolvedOffset</code></td>
+                        <td>Byte offset of <code>_unresolved</code> within <code>UnresolvedSection</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x40</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Align</code></td>
+                        <td><em>(v2+)</em> Required byte alignment for module sections (power of 2).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x44</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>BssAlign</code></td>
+                        <td><em>(v2+)</em> Required byte alignment for module BSS (power of 2).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x48</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>FixSize</code></td>
+                        <td><em>(v3+)</em> Byte offset within file after which relocation/import data may be reclaimed post-link.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="REL sub-tables" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.3 — .rel Section, Import &amp; Relocation Entry Records (8 Bytes Each)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>Sec + 0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>OffsetAndFlags</code></td>
+                        <td>Bit 0 (<code>0x1</code>) = <code>EXEC</code> flag; <code>FileOffset = OffsetAndFlags &amp; ~3</code> (<code>0</code> if BSS/unused).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Sec + 0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Length</code></td>
+                        <td>Section size in bytes (<code>0</code> if unused slot).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Imp + 0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>TargetModuleId</code></td>
+                        <td>Module ID resolved by this stream (<code>0</code> = main <code>.dol</code>; <code>&gt;0</code> = <code>.rel</code> module).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Imp + 0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>RelocOffset</code></td>
+                        <td>File offset where this import's relocation entries begin.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Rel + 0x00</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>OffsetDelta</code></td>
+                        <td>Unsigned byte increment added to current section cursor before patching.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Rel + 0x02</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>RelocType</code></td>
+                        <td>PowerPC relocation type or Dolphin control opcode (<code>201–204</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Rel + 0x03</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>Section</code></td>
+                        <td>Target symbol's section index (or patched section index for opcode <code>202</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Rel + 0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Addend</code></td>
+                        <td>Offset within target module's <code>Section</code> (or absolute virtual address when <code>TargetModuleId == 0</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>3.1 .rel Relocation Opcodes &amp; Patching Equations</h3>
+        <p>Let <code>P</code> be the virtual address of the instruction/word being patched (<code>sectionBase[curSec] + cursor</code>) and <code>S</code> be the resolved symbol virtual address (<code>addend</code> if <code>TargetModuleId == 0</code>, otherwise <code>targetSectionBase[entry.Section] + entry.Addend</code>):</p>
+        <ul>
+            <li><code>0</code> (<code>R_PPC_NONE</code>): No operation.</li>
+            <li><code>1</code> (<code>R_PPC_ADDR32</code>): Write 32-bit value <code>S</code> at <code>P</code>.</li>
+            <li><code>2</code> (<code>R_PPC_ADDR24</code>): Patch 24-bit branch target bits <code>[29:6]</code> (<code>(orig &amp; ~0x03FFFFFC) | (S &amp; 0x03FFFFFC)</code>).</li>
+            <li><code>3</code> (<code>R_PPC_ADDR16</code>): Write <code>u16be(S &amp; 0xFFFF)</code> at <code>P</code>.</li>
+            <li><code>4</code> (<code>R_PPC_ADDR16_LO</code>): Write <code>u16be(S &amp; 0xFFFF)</code> at <code>P</code>.</li>
+            <li><code>5</code> (<code>R_PPC_ADDR16_HI</code>): Write <code>u16be((S &gt;&gt; 16) &amp; 0xFFFF)</code> at <code>P</code>.</li>
+            <li><code>6</code> (<code>R_PPC_ADDR16_HA</code>): Write <code>u16be(((S + 0x8000) &gt;&gt; 16) &amp; 0xFFFF)</code> at <code>P</code> (sign-adjusted high half for paired <code>addi</code>/<code>lwz</code>).</li>
+            <li><code>7</code> (<code>R_PPC_ADDR14</code>), <code>8</code> (<code>BRTAKEN</code>), <code>9</code> (<code>BRNTAKEN</code>): Patch 14-bit conditional branch displacement <code>(orig &amp; ~0xFFFC) | (S &amp; 0xFFFC)</code>.</li>
+            <li><code>10</code> (<code>R_PPC_REL24</code>): PC-relative 24-bit branch: <code>(orig &amp; ~0x03FFFFFC) | ((S - P) &amp; 0x03FFFFFC)</code>.</li>
+            <li><code>11</code> (<code>R_PPC_REL14</code>), <code>12</code> (<code>BRTAKEN</code>), <code>13</code> (<code>BRNTAKEN</code>): PC-relative 14-bit branch: <code>(orig &amp; ~0xFFFC) | ((S - P) &amp; 0xFFFC)</code>.</li>
+            <li><code>201</code> (<code>R_DOLPHIN_NOP</code>): Advance <code>cursor += OffsetDelta</code> without patching (used when delta exceeds <code>65,535</code> bytes).</li>
+            <li><code>202</code> (<code>R_DOLPHIN_SECTION</code>): Set <code>curSec = entry.Section</code> and reset <code>cursor = 0</code>.</li>
+            <li><code>203</code> (<code>R_DOLPHIN_END</code>): Terminate current import relocation stream.</li>
+            <li><code>204</code> (<code>R_DOLPHIN_MRKREF</code>): Metadata marker; ignored by standard linkers.</li>
+        </ul>
+
+        <h3>3.2 Generalized MEM1/MEM2 &amp; IOS Low-Memory Loader Mapping</h3>
+        <p>Before jumping to <code>DOL.EntryPoint</code>, the Wii boot chain (Starlet IOS + apploader/NAND loader) populates standard Broadway low-memory globals in MEM1:</p>
+        <ul>
+            <li><code>0x80000028</code> (<code>u32be</code>): Physical MEM1 size (<code>0x01800000</code> = 24 MiB).</li>
+            <li><code>0x8000002C</code> (<code>u32be</code>): Console hardware type flag.</li>
+            <li><code>0x800000F8</code> (<code>u32be</code>): Bus clock frequency (<code>243000000</code> Hz).</li>
+            <li><code>0x800000FC</code> (<code>u32be</code>): Broadway CPU clock frequency (<code>729000000</code> Hz).</li>
+            <li><code>0x80003100–0x80003110</code>: Physical/simulated MEM1 size, MEM1 end (<code>0x81800000</code>), and MEM1 arena low/high bounds.</li>
+            <li><code>0x80003118–0x80003128</code>: Physical/simulated MEM2 size (<code>0x04000000</code> = 64 MiB), MEM2 end / IOS boundary (typically <code>0x93400000</code>–<code>0x93600000</code>), MEM2 usable start (<code>0x90000800</code>), and MEM2 arena end.</li>
+            <li><code>0x80003130–0x80003134</code>: IPC shared buffer start and end in upper MEM2.</li>
+            <li><code>0x80003140</code> (<code>u32be</code>): Active IOS slot and revision (e.g., <code>(ios_num &lt;&lt; 16) | ios_rev</code>).</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>MEM1 vs. MEM2 Section Routing:</strong> A Wii <code>.dol</code> may place sections across both <code>0x80000000–0x817FFFFF</code> (MEM1) and <code>0x90000000–0x93FFFFFF</code> (MEM2), or uncached mirrors <code>0xC0000000+</code> / <code>0xD0000000+</code>. A generalized loader must verify that MEM2 sections do not overlap the upper Starlet/IOS private/IPC region.</li>
+            <li><strong>BSS Overlap / Zero-Fill Ordering:</strong> <code>.dol</code> BSS (<code>0xD8–0xDF</code>) must be zeroed <em>before</em> copying initialized Text and Data sections (or zeroed only for bytes outside initialized sections). Revolution SDK <code>elf2dol</code> merges gaps into the BSS span that can enclose initialized sections such as <code>.sdata2</code>, so zeroing BSS afterwards would clobber initialized data.</li>
+            <li><strong>Cache Coherency (DCFlush / ICInvalidate):</strong> On real Broadway hardware or accurate emulators, after writing executable sections or applying <code>.rel</code> instruction patches, the loader must flush the data cache (<code>DCFlushRange</code>) and invalidate the instruction cache (<code>ICInvalidateRange</code>).</li>
+            <li><strong><code>.rel</code> Section 0 &amp; BSS Allocation:</strong> Section index <code>0</code> in a <code>.rel</code> is always a null/dummy entry (<code>OffsetAndFlags == 0</code>, <code>Length == 0</code>). A section with <code>FileOffset == 0</code> and <code>Length &gt; 0</code> represents the module's BSS block of size <code>BssSize</code>, allocated dynamically and assigned at runtime.</li>
+            <li><strong><code>R_DOLPHIN_NOP</code> Chaining:</strong> Because <code>OffsetDelta</code> is 16-bit unsigned, gaps larger than <code>65,535</code> bytes between relocations are encoded as one or more <code>R_DOLPHIN_NOP</code> (<code>201</code>) records adding <code>0xFFFF</code> or the remainder before the patching entry.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function load_wii_dol(dol_bytes, mem1, mem2):
+    assert len(dol_bytes) &gt;= 0x100
+
+    # Zero BSS before copying initialized Text/Data segments (elf2dol BSS can span initialized sections)
+    bss_addr = u32be(dol_bytes, 0xD8)
+    bss_size = u32be(dol_bytes, 0xDC)
+    if bss_addr != 0 and bss_size != 0:
+        zero_virtual_mem(mem1, mem2, bss_addr, bss_size)
+
+    for i in 0..6:
+        off  = u32be(dol_bytes, 0x00 + i * 4)
+        addr = u32be(dol_bytes, 0x48 + i * 4)
+        size = u32be(dol_bytes, 0x90 + i * 4)
+        if off != 0 and size != 0:
+            write_virtual_mem(mem1, mem2, addr, dol_bytes[off : off + size], exec=true)
+
+    for i in 0..10:
+        off  = u32be(dol_bytes, 0x1C + i * 4)
+        addr = u32be(dol_bytes, 0x64 + i * 4)
+        size = u32be(dol_bytes, 0xAC + i * 4)
+        if off != 0 and size != 0:
+            write_virtual_mem(mem1, mem2, addr, dol_bytes[off : off + size], exec=false)
+
+    return { entry_point: u32be(dol_bytes, 0xE0) }
+
+function link_wii_rel(rel_bytes, loaded_modules, alloc_mem):
+    mod_id      = u32be(rel_bytes, 0x00)
+    num_sec     = u32be(rel_bytes, 0x0C)
+    sec_off     = u32be(rel_bytes, 0x10)
+    version     = u32be(rel_bytes, 0x1C)
+    bss_size    = u32be(rel_bytes, 0x20)
+    imp_off     = u32be(rel_bytes, 0x28)
+    imp_size    = u32be(rel_bytes, 0x2C)
+    align_val   = (version &gt;= 2) ? u32be(rel_bytes, 0x40) : 32
+    bss_align   = (version &gt;= 2) ? u32be(rel_bytes, 0x44) : 32
+
+    sec_bases = array(num_sec, 0)
+    bss_base = (bss_size &gt; 0) ? alloc_mem(bss_size, bss_align) : 0
+    if bss_base != 0:
+        zero_mem(bss_base, bss_size)
+
+    for s in 0..(num_sec - 1):
+        val = u32be(rel_bytes, sec_off + s * 8)
+        len = u32be(rel_bytes, sec_off + s * 8 + 4)
+        file_off = val &amp; ~3
+        if len == 0:
+            continue
+        if file_off == 0:
+            sec_bases[s] = bss_base
+        else:
+            base = alloc_mem(len, align_val)
+            copy_mem(base, rel_bytes[file_off : file_off + len])
+            sec_bases[s] = base
+
+    loaded_modules[mod_id] = sec_bases
+
+    for k in 0..(imp_size // 8 - 1):
+        target_mod = u32be(rel_bytes, imp_off + k * 8)
+        rel_pos    = u32be(rel_bytes, imp_off + k * 8 + 4)
+        cur_sec    = 0
+        cursor     = 0
+        while true:
+            delta  = u16be(rel_bytes, rel_pos + 0)
+            rtype  = rel_bytes[rel_pos + 2]
+            sym_s  = rel_bytes[rel_pos + 3]
+            addend = u32be(rel_bytes, rel_pos + 4)
+            rel_pos += 8
+
+            if rtype == 203: // R_DOLPHIN_END
+                break
+            elif rtype == 202: // R_DOLPHIN_SECTION
+                cur_sec = sym_s
+                cursor  = 0
+                continue
+            elif rtype == 201: // R_DOLPHIN_NOP
+                cursor += delta
+                continue
+            elif rtype == 204 or rtype == 0:
+                cursor += delta
+                continue
+
+            cursor += delta
+            P = sec_bases[cur_sec] + cursor
+            S = (target_mod == 0) ? addend : (loaded_modules[target_mod][sym_s] + addend)
+            apply_ppc_reloc(rtype, P, S)</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn" role="note">
+            <strong>Loader &amp; IOS Revision Caveat:</strong> Exact upper MEM2 arena boundaries (<code>0x80003120</code> / <code>0x80003128</code>) and IPC buffer allocations vary across IOS slots and SDK versions. Generalized loaders should configure these globals dynamically according to the active IOS profile rather than assuming a single static MEM2 ceiling.
+        </aside>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> Both the 256-byte <code>.dol</code> header and <code>.rel</code> v1–v3 headers, PowerPC relocation opcodes (<code>0–13</code>), Dolphin control opcodes (<code>201–204</code>), and Broadway MEM1/MEM2 low-memory global slots (<code>0x80000000–0x800031FF</code>) are confirmed across Wii SDK binaries and System Menu/apploader behavior.</li>
+            <li><strong>Relocation Variant Note:</strong> Relocation types <code>14–200</code> (such as SDA21 or GOT relocations) are defined in generic PowerPC ELF ABI specifications but are not emitted in standard linked <code>.rel</code> v3 files; unhandled opcodes should raise a diagnostic rather than silently continuing.</li>
+        </ul>
+    </section>
+</body>
+</html>

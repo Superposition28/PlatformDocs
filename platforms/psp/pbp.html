@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EBOOT.PBP 8-Section Container Format — PlayStation Portable — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#psp" target="_top">PlayStation Portable</a>
+        <span>/</span>
+        <span>EBOOT.PBP 8-Section Container</span>
+    </nav>
+
+    <h1>EBOOT.PBP 8-Section Container Format</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">PSP Executable &amp; XMB Package · Little-Endian</p>
+        <p><code>EBOOT.PBP</code> is Sony's standard 8-slot container used on PSP Memory Stick (<code>ms0:/PSP/GAME/</code>), internal flash (<code>ef0:/PSP/GAME/</code>), and firmware updaters. A fixed 40-byte header records the <code>\x00PBP</code> magic, version, and eight ascending byte offsets pointing to metadata, XMB presentation assets, the main executable, and an optional trailing resource archive.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>EBOOT.PBP</code>, <code>*.PBP</code></dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>00 50 42 50</code> (<code>"\x00PBP"</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (<code>u32le</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation Portable System Software / XMB (all retail &amp; devkit firmware revisions)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Application &amp; updater bundle container (<code>application/x-psp-pbp</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout</a></li>
+            <li><a href="#flags">3. Flags, Slots &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification" class="section">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Any valid PBP file starts at offset <code>0x00</code> with the 4-byte signature <code>00 50 42 50</code> (<code>\x00PBP</code>) followed by a 32-bit little-endian version word (<code>0x00010000</code> in standard PSP 1.00+ packages, or <code>0x00010001</code> in select later digital/PS1 Classics packages). All integer fields in the PBP header are stored in little-endian byte order for the Allegrex MIPS32r2 processor.</p>
+        <p>Unlike directory-based archive containers, the PBP header stores <strong>no filenames and no explicit section lengths</strong>. Instead, it defines eight fixed positional slots at offsets <code>0x08</code> through <code>0x24</code> whose canonical identities are fixed by specification.</p>
+    </section>
+
+    <section id="layout" class="section">
+        <h2>2. Binary Layout</h2>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PBP Header Layout (40 / 0x28 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u8[4]</code></td>
+                        <td><code>magic</code></td>
+                        <td>Constant signature <code>00 50 42 50</code> (<code>\x00PBP</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>version</code></td>
+                        <td>Format version, typically <code>0x00010000</code> (major <code>1</code>, minor <code>0</code>) or <code>0x00010001</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>offset_param_sfo</code></td>
+                        <td>Slot 0 offset: <a href="../../index.html#psp-param-sfo" target="_top"><code>PARAM.SFO</code></a> metadata table (typically <code>0x00000028</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>offset_icon0_png</code></td>
+                        <td>Slot 1 offset: <code>ICON0.PNG</code> XMB static icon</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>offset_icon1_pmf</code></td>
+                        <td>Slot 2 offset: <code>ICON1.PMF</code> XMB animated icon video</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>offset_pic0_png</code></td>
+                        <td>Slot 3 offset: <code>PIC0.PNG</code> XMB secondary info overlay image</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>offset_pic1_png</code></td>
+                        <td>Slot 4 offset: <code>PIC1.PNG</code> XMB full-screen background image</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>offset_snd0_at3</code></td>
+                        <td>Slot 5 offset: <code>SND0.AT3</code> XMB background audio</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>offset_data_psp</code></td>
+                        <td>Slot 6 offset: <code>DATA.PSP</code> executable (<a href="../../index.html#psp-prx-elf" target="_top"><code>~PSP</code> PRX or ELF32-MIPS</a>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x24</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>offset_data_psar</code></td>
+                        <td>Slot 7 offset: <code>DATA.PSAR</code> auxiliary data archive (or <code>file_size</code> when absent)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Canonical PBP Section Slots (Slots 0–7)</caption>
+                <thead>
+                    <tr>
+                        <th>Slot</th>
+                        <th>Header Offset</th>
+                        <th>Type</th>
+                        <th>Canonical Name</th>
+                        <th>Payload Format &amp; XMB Constraints</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0</code></td>
+                        <td><code>0x08</code></td>
+                        <td>PSF Table</td>
+                        <td><code>PARAM.SFO</code></td>
+                        <td>Required on bootable packages. Little-endian <code>\x00PSF</code> metadata table.</td>
+                    </tr>
+                    <tr>
+                        <td><code>1</code></td>
+                        <td><code>0x0C</code></td>
+                        <td>PNG</td>
+                        <td><code>ICON0.PNG</code></td>
+                        <td>Optional XMB icon; standard dimensions <code>144x80</code> (24/32-bit PNG, max ~512 KiB).</td>
+                    </tr>
+                    <tr>
+                        <td><code>2</code></td>
+                        <td><code>0x10</code></td>
+                        <td>PMF Video</td>
+                        <td><code>ICON1.PMF</code></td>
+                        <td>Optional animated XMB icon (<code>PSMF</code> MPEG-4 AVC stream, typically <code>144x80</code>, looping).</td>
+                    </tr>
+                    <tr>
+                        <td><code>3</code></td>
+                        <td><code>0x14</code></td>
+                        <td>PNG</td>
+                        <td><code>PIC0.PNG</code></td>
+                        <td>Optional XMB info overlay graphic (typically <code>310x180</code> PNG).</td>
+                    </tr>
+                    <tr>
+                        <td><code>4</code></td>
+                        <td><code>0x18</code></td>
+                        <td>PNG</td>
+                        <td><code>PIC1.PNG</code></td>
+                        <td>Optional XMB full-screen background graphic (standard PSP screen size <code>480x272</code> PNG).</td>
+                    </tr>
+                    <tr>
+                        <td><code>5</code></td>
+                        <td><code>0x1C</code></td>
+                        <td>ATRAC3 RIFF</td>
+                        <td><code>SND0.AT3</code></td>
+                        <td>Optional XMB background audio (RIFF/WAVE container with Sony ATRAC3/ATRAC3plus codec, capped ~500 KiB in XMB).</td>
+                    </tr>
+                    <tr>
+                        <td><code>6</code></td>
+                        <td><code>0x20</code></td>
+                        <td>Executable</td>
+                        <td><code>DATA.PSP</code></td>
+                        <td>Main executable: Kirk-encrypted <code>~PSP</code> wrapper or plain ELF32-MIPS/PRX binary.</td>
+                    </tr>
+                    <tr>
+                        <td><code>7</code></td>
+                        <td><code>0x24</code></td>
+                        <td>PSAR Archive</td>
+                        <td><code>DATA.PSAR</code></td>
+                        <td>Optional large data payload (e.g., encrypted firmware updater archive <code>PSAR</code> or emulator disc image).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags" class="section">
+        <h2>3. Flags, Slots &amp; Decoding Formulas</h2>
+        <p>The PBP header contains no bitflags; section presence and sizes are derived exclusively from the monotonic offset array <code>offsets[0..7]</code> and the total file size <code>file_size</code>:</p>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PBP Section Size Derivation Formulas</caption>
+                <thead>
+                    <tr>
+                        <th>Condition</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Formula</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Slots <code>0..6</code></td>
+                        <td>Derived</td>
+                        <td><code>u32</code></td>
+                        <td><code>size[i] = offsets[i + 1] - offsets[i]</code></td>
+                        <td>Byte length of section <code>i</code> equals the difference to the next slot's start offset</td>
+                    </tr>
+                    <tr>
+                        <td>Slot <code>7</code> (<code>DATA.PSAR</code>)</td>
+                        <td>Derived</td>
+                        <td><code>u64</code></td>
+                        <td><code>size[7] = file_size - offsets[7]</code></td>
+                        <td>Byte length of <code>DATA.PSAR</code> runs from <code>offsets[7]</code> to end of file</td>
+                    </tr>
+                    <tr>
+                        <td>Empty / Omitted Slot</td>
+                        <td><code>0</code></td>
+                        <td><code>bool</code></td>
+                        <td><code>size[i] == 0</code></td>
+                        <td>A slot is absent when its offset equals the next slot's offset (or <code>file_size</code> for slot 7)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="edge-cases" class="section">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>Zero-length empty sections:</strong> Most homebrew and utility PBPs omit <code>ICON1.PMF</code>, <code>PIC0.PNG</code>, <code>SND0.AT3</code>, and <code>DATA.PSAR</code>. When multiple consecutive sections are empty, several entries in <code>offsets[0..7]</code> share the exact same byte value (for example, <code>offsets[2] == offsets[3] == offsets[4]</code>). Parsers must emit or skip zero-byte slots cleanly without treating duplicate offsets as errors.</li>
+            <li><strong>Monotonicity &amp; bounds validation:</strong> Valid PBPs satisfy <code>0x28 &lt;= offsets[0] &lt;= offsets[1] &lt;= ... &lt;= offsets[7] &lt;= file_size</code>. Any violation indicates corruption, truncation, or a malformed header.</li>
+            <li><strong><code>DATA.PSAR</code> trailing bounds &amp; alignment padding:</strong> Because slot 7 has no sentinel "end of PSAR" field in the 40-byte PBP header, <code>file_size - offsets[7]</code> includes any trailing padding or appended container signatures. Likewise, some official packers align <code>DATA.PSP</code> or <code>DATA.PSAR</code> to 16-byte or 4096-byte boundaries; padding bytes between a payload's inner end (such as PNG <code>IEND</code> or SFO end) and <code>offsets[i + 1]</code> fall inside the derived slice <code>size[i]</code>.</li>
+            <li><strong>4 GiB offset ceiling:</strong> PBP offsets are unsigned 32-bit integers (<code>u32le</code>), capping section start offsets at <code>4 GiB - 1</code>. Only <code>DATA.PSAR</code> (slot 7) can extend beyond 4 GiB if <code>file_size</code> is tracked as 64-bit, though standard PSP FAT32 Memory Stick files cannot exceed <code>4 GiB - 1</code>.</li>
+            <li><strong><code>DATA.PSP</code> execution gate:</strong> Official PSP firmware routes <code>DATA.PSP</code> through <code>sceKernelLoadModule</code> / Kirk verification; retail firmware requires a valid <code>~PSP</code> encrypted/signed header, whereas devkit or custom environments may also execute plain ELF32-MIPS binaries in slot 6.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode" class="section">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>SLOT_NAMES = [
+    "PARAM.SFO", "ICON0.PNG", "ICON1.PMF", "PIC0.PNG",
+    "PIC1.PNG",  "SND0.AT3",  "DATA.PSP",  "DATA.PSAR"
+]
+
+function parse_pbp(stream, file_size):
+    if file_size &lt; 0x28:
+        error("File smaller than 40-byte PBP header")
+
+    seek(stream, 0x00)
+    magic = read_bytes(stream, 4)
+    if magic != b"\x00PBP":
+        error("Invalid PBP magic")
+
+    version = read_u32le(stream)
+    offsets = [read_u32le(stream) for _ in range(8)]
+
+    prev = 0x28
+    for i in range(8):
+        if offsets[i] &lt; prev or offsets[i] &gt; file_size:
+            error("Non-monotonic or out-of-bounds PBP offset at slot " + str(i))
+        prev = offsets[i]
+
+    sections = []
+    for i in range(8):
+        start = offsets[i]
+        end = offsets[i + 1] if i &lt; 7 else file_size
+        length = end - start
+        sections.append({
+            "slot": i,
+            "name": SLOT_NAMES[i],
+            "offset": start,
+            "size": length,
+            "present": length &gt; 0
+        })
+
+    return {
+        "version": version,
+        "sections": sections
+    }</code></pre>
+    </section>
+
+    <section id="provenance" class="section">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>The 40-byte PBP header layout, <code>\x00PBP</code> magic, slot ordering, and adjacent-offset size derivation are <strong>confirmed</strong> across all PSP retail firmware generations, official firmware updaters, and Sony/homebrew PBP tooling.</p>
+        <aside class="callout-warn">
+            <p><strong>Revision &amp; inner payload caveats:</strong> While the 8-slot PBP wrapper itself is invariant, the internal format of <code>DATA.PSAR</code> varies significantly by package role (encrypted <code>PSAR</code> firmware update archives vs. PS1 Classics disc containers) and is outside the outer PBP header specification. Likewise, XMB asset size and codec limits (such as <code>ICON0.PNG</code>, <code>PIC1.PNG</code>, and <code>SND0.AT3</code> ATRAC3 bitrate/size caps) are enforced by VSH/XMB software and vary slightly across PSP firmware revisions.</p>
+        </aside>
+    </section>
+</body>
+</html>

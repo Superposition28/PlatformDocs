@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Original Xbox — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><span>Original Xbox</span>
+    </nav>
+
+    <div class="doc-overview">
+        <h1>Original Xbox</h1>
+        <section class="format-summary">
+            <p class="eyebrow">Platform Architecture &amp; Inherited Format Overview</p>
+            <p>
+                Hardware, OS kernel, optical disc filesystem, executable, and resource/metadata specifications
+                inherited from the Original Xbox (2001) hardware and Microsoft Xbox Development Kit (XDK) runtime.
+            </p>
+            <dl>
+                <dt>CPU Architecture</dt>
+                <dd>Intel Pentium III (Coppermine-derived, x86 32-bit IA-32, 733 MHz, MMX/SSE)</dd>
+                <dt>System Memory</dt>
+                <dd>64 MB Unified Memory Architecture (UMA) DDR SDRAM shared between CPU and NV2A GPU (128 MB on XDK debug kits)</dd>
+                <dt>Byte Order</dt>
+                <dd>Little-endian across CPU, kernel structures, executables, optical filesystem, and D3D8 packed resources</dd>
+                <dt>OS / Kernel Model</dt>
+                <dd>Custom single-address-space microkernel (<code>xboxkrnl.exe</code>, Windows NT-derived) with ordinal thunk linking, no virtual swap, and statically linked XDK libraries</dd>
+                <dt>Primary Media</dt>
+                <dd>Proprietary dual-layer DVD-ROM (XGD1 with XDVDFS game partition), internal FATX hard disk (partitions for dashboard, cache, <code>TDATA</code>, and <code>UDATA</code>), and 8 MB Memory Units</dd>
+            </dl>
+        </section>
+
+        <section class="section" id="architecture">
+            <h2>Hardware &amp; Kernel Execution Model</h2>
+            <p>
+                Unlike a general-purpose Windows PC, the Original Xbox executes one title at a time directly in a flat
+                32-bit physical-backed address space without user/kernel virtual isolation or dynamic DLL loading.
+                All Win32/Xbox APIs (<code>xapilib</code>, <code>d3d8</code>, <code>dsound</code>, <code>xnet</code>) are
+                statically compiled into the title executable (<code>default.xbe</code>), while hardware and filesystem
+                services are imported exclusively by ordinal from the resident kernel (<code>xboxkrnl.exe</code>).
+            </p>
+            <ul>
+                <li><strong>Boot &amp; Verification:</strong> The boot ROM initializes hardware, verifies the RSA-2048 signature of <code>default.xbe</code> (or a dashboard/recovery XBE), maps its sections directly at <code>BaseAddress</code> (typically <code>0x00010000</code>), unmasks the XOR-obfuscated entry point and kernel thunk table, resolves kernel ordinals, displays the embedded 100&times;17 startup logo, and transfers control to the title.</li>
+                <li><strong>Optical Media Layout:</strong> Retail discs (XGD1) place a standard DVD-Video warning partition at sector 0 followed by the encrypted/authenticated XDVDFS game partition starting at byte offset <code>0x18300000</code>. Trimmed XISO images start directly at the XDVDFS partition base (offset <code>0x00000000</code>).</li>
+                <li><strong>Persistent Storage &amp; Title Metadata:</strong> Title data (<code>TDATA\&lt;TitleID&gt;\</code>) and user saves (<code>UDATA\&lt;TitleID&gt;\</code>) live on FATX volumes and use standardized UTF-16LE <code>.xbx</code> text descriptors alongside D3D8 <code>XPR0</code> icon containers.</li>
+            </ul>
+        </section>
+
+        <section class="section" id="formats">
+            <h2>Platform-Inherited Format Specifications</h2>
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>Original Xbox Platform Formats</caption>
+                    <thead>
+                        <tr>
+                            <th>Format / File</th>
+                            <th>Magic</th>
+                            <th>Endianness</th>
+                            <th>Specification</th>
+                            <th>Role</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>default.xbe</code> (<code>*.xbe</code>)</td>
+                            <td><code>XBEH</code> (<code>0x48454258</code>)</td>
+                            <td>Little-endian</td>
+                            <td><a href="../../index.html#xbox-xbe" target="_top">Xbox Executable (.xbe)</a></td>
+                            <td>Signed/hashed executable image, section table, certificate, kernel thunk table, TLS, and startup logo</td>
+                        </tr>
+                        <tr>
+                            <td>XDVDFS / XISO / XGD1</td>
+                            <td><code>MICROSOFT*XBOX*MEDIA</code></td>
+                            <td>Little-endian</td>
+                            <td><a href="../../index.html#xbox-xdvdfs" target="_top">XDVDFS / XISO Filesystem</a></td>
+                            <td>2048-byte sector optical disc filesystem with binary search tree (BST) directory tables</td>
+                        </tr>
+                        <tr>
+                            <td><code>TitleMeta.xbx</code>, <code>SaveMeta.xbx</code>, <code>SaveImage.xbx</code>, <code>XPR0</code> / <code>XPR1</code></td>
+                            <td>UTF-16LE BOM / <code>XPR0</code> / <code>XPR1</code></td>
+                            <td>Little-endian</td>
+                            <td><a href="../../index.html#xbox-xpr-save" target="_top">XBX Metadata &amp; XPR0/XPR1 Containers</a></td>
+                            <td>Title/save display metadata, dashboard/save icons, and D3D8 packed GPU resource bundles</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section" id="scope">
+            <h2>Scope Boundary</h2>
+            <p>
+                This section documents strictly platform-inherited Microsoft Xbox hardware, kernel, optical disc, and XDK
+                formats. Title-specific archives, scripting runtimes, and middleware formats stored inside the XDVDFS tree
+                are excluded.
+            </p>
+        </section>
+    </div>
+</body>
+</html>

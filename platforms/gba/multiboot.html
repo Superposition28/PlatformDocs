@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>.mb Multiboot Header &amp; Link/JoyBus Protocol — Game Boy Advance — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#gba" target="_top">Game Boy Advance</a><span>/</span><span>.mb Multiboot &amp; Link/JoyBus</span>
+    </nav>
+
+    <h1>.mb Multiboot Header &amp; Link / JoyBus Boot Protocol</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Game Boy Advance &middot; EWRAM Multiboot Image &amp; Transfer Protocol Specification</p>
+        <p>Game Boy Advance Multiboot images allow a slave GBA without a cartridge (or holding <code>START+SELECT</code>) to receive and execute up to ~256 KiB of code directly in External Work RAM (<code>0x02000000</code>) over the Link Cable (Normal or MultiPlay mode via BIOS <code>SWI 0x25</code>) or a JoyBus host link. The format extends the standard 192-byte cartridge header with RAM and JoyBus branch entrypoints at <code>0x0C0&ndash;0x0E3</code>.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.mb</code> (standalone Multiboot binary), <code>*.gba</code> / <code>*.bin</code> (dual-boot or EWRAM-linked image)</dd>
+            <dt>Magic Bytes</dt>
+            <dd>Standard header (<code>0x0B2 == 0x96</code>, 156-byte logo) plus ARM branch <code>0xEAxxxxxx</code> at <code>0x0C0</code> (Normal/MultiPlay) and/or <code>0x0E0</code> (JoyBus)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-Endian in EWRAM image; SIO/JoyBus serial transfers exchange 16-bit and 32-bit little-endian words</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo Game Boy Advance BIOS (<code>SWI 0x25</code> MultiBoot &amp; slave ROM bootloader), loaded at <code>0x02000000</code></dd>
+            <dt>Role/MIME</dt>
+            <dd>RAM-resident link-bootable executable image (<code>application/x-gba-multiboot</code>, unofficial)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>A Multiboot image shares the exact first <code>0xC0</code> (192) bytes of a <a href="../../index.html#gba-gba-rom" target="_top">.gba Cartridge ROM Header</a> and appends a 36-byte extended multiboot header from <code>0x0C0</code> to <code>0x0E3</code>. Unlike cartridge ROMs mapped at <code>0x08000000</code>, Multiboot images are copied into the 256 KiB External Work RAM window at <code>0x02000000&ndash;0x0203FFFF</code>.</p>
+        <ul>
+            <li><strong>Transfer Scope:</strong> The initial 192-byte header (<code>0x000&ndash;0x0BF</code>) is exchanged unencrypted during the Link Cable handshake so the slave BIOS can verify the Nintendo Logo and complement check; the body starting at <code>0x0C0</code> (up to <code>0x3FF40</code> bytes) is transferred encrypted by BIOS <code>SWI 0x25</code> (<code>MultiBoot</code>).</li>
+            <li><strong>Dual-Purpose Images:</strong> Many builds place an ARM branch at <code>0x000</code> (if booted from ROM) and a second ARM branch at <code>0x0C0</code> (if booted from EWRAM via Multiboot).</li>
+            <li><strong>Endianness Rules:</strong> All fields inside the <code>.mb</code> image and <code>MultiBootParam</code> structure are little-endian.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="Extended Multiboot Header Layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Extended Multiboot Header (Offsets 0x0C0&ndash;0x0E3, Following 0x000&ndash;0x0BF Shared Header)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x000</code></td>
+                        <td>192 B</td>
+                        <td>Header</td>
+                        <td>Standard GBA Header</td>
+                        <td>Identical to <a href="../../index.html#gba-gba-rom" target="_top">.gba header</a> (<code>0x000&ndash;0x0BF</code>): ROM entrypoint, 156-byte logo, title, game/maker codes, <code>0x96</code>, complement check.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C0</code></td>
+                        <td>4 B</td>
+                        <td>u32le</td>
+                        <td>RAM Entry Point</td>
+                        <td>ARM branch opcode (<code>B &lt;ram_start&gt;</code>, <code>0xEAxxxxxx</code>) executed at <code>0x020000C0</code> when booted via Normal or MultiPlay mode.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C4</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Boot Mode</td>
+                        <td>Initialize to <code>0x00</code> in image. Overwritten by slave BIOS before jump: <code>0x01</code> = JoyBus, <code>0x02</code> = Normal, <code>0x03</code> = MultiPlay.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C5</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Slave / Client ID</td>
+                        <td>Initialize to <code>0x00</code> in image. Overwritten by BIOS in Normal/MultiPlay mode with slave number (<code>0x01</code>, <code>0x02</code>, or <code>0x03</code>); untouched in JoyBus mode.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C6</code></td>
+                        <td>26 B</td>
+                        <td>u8[26]</td>
+                        <td>Reserved / Unused</td>
+                        <td>Zero-filled padding up to <code>0x0DF</code>. Do not place code at <code>0x0C4&ndash;0x0C5</code> as BIOS overwrites those bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0E0</code></td>
+                        <td>4 B</td>
+                        <td>u32le</td>
+                        <td>JoyBus Entry Point</td>
+                        <td>ARM branch opcode (<code>B &lt;joy_start&gt;</code>, <code>0xEAxxxxxx</code>) executed at <code>0x020000E0</code> when booted via JoyBus mode.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="BIOS MultiBootParam struct" tabindex="0">
+            <table class="format-counts">
+                <caption>BIOS SWI 0x25 MultiBootParam Structure (0x4C Bytes Allocated; 0x44 Bytes Used by BIOS)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>20 B</td>
+                        <td>u32le[5]</td>
+                        <td><code>reserved1</code></td>
+                        <td>Internal BIOS workspace / reserved slots.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>handshake_data</code></td>
+                        <td>Master handshake byte sent during step <code>0x64hh</code> (<code>f</code> seed byte 0).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x15</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>padding</code></td>
+                        <td>Alignment padding byte.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x16</code></td>
+                        <td>2 B</td>
+                        <td>u16le</td>
+                        <td><code>handshake_timeout</code></td>
+                        <td>Timeout counter for slave responses.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>probe_count</code></td>
+                        <td>Transfer state / probe attempt counter managed during handshake.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x19</code></td>
+                        <td>3 B</td>
+                        <td>u8[3]</td>
+                        <td><code>client_data</code></td>
+                        <td>Three response bytes received from clients 1..3 during <code>0x63pp</code> palette exchange.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>palette_data</code></td>
+                        <td>Controls client Nintendo logo animation color, direction, and speed.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1D</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>response_bit</code></td>
+                        <td>Bitmask of slaves responding during handshake probe.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1E</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>client_bit</code></td>
+                        <td>Bitfield of active detected slaves (bits <code>1..3</code> correspond to clients <code>1..3</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1F</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>reserved2</code></td>
+                        <td>Reserved alignment byte.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>4 B</td>
+                        <td>u32le</td>
+                        <td><code>boot_srcp</code></td>
+                        <td>Pointer to start of encrypted payload body (typically <code>base + 0xC0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x24</code></td>
+                        <td>4 B</td>
+                        <td>u32le</td>
+                        <td><code>boot_endp</code></td>
+                        <td>Exclusive end pointer of payload body (<code>boot_srcp + payload_len</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>4 B</td>
+                        <td>u32le</td>
+                        <td><code>masterp</code></td>
+                        <td>Pointer to the 192-byte header buffer sent during handshake.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2C</code></td>
+                        <td>12 B</td>
+                        <td>u32le[3]</td>
+                        <td><code>reserved3</code></td>
+                        <td>Reserved internal pointers.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x38</code></td>
+                        <td>16 B</td>
+                        <td>u32le[4]</td>
+                        <td><code>system_work2</code></td>
+                        <td>BIOS internal scratch space.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x48</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>sendflag</code></td>
+                        <td>Transmission active flag.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x49</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>probe_target_bit</code></td>
+                        <td>Target client bitmask for probing.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x4A</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>check_wait</code></td>
+                        <td>Frame/delay wait counter.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x4B</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>server_type</code></td>
+                        <td>Transfer mode selector passed in <code>r1</code> to <code>SWI 0x25</code>: <code>0</code> = MultiPlay (16-bit), <code>1</code> = Normal (32-bit fast).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Link Cable Handshake Sequence" tabindex="0">
+            <table class="format-counts">
+                <caption>Link Cable MultiBoot Handshake &amp; Transfer Sequence (16-bit MultiPlay Frames)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Step</th>
+                        <th scope="col">Master Sends</th>
+                        <th scope="col">Slave Replies</th>
+                        <th scope="col">Protocol Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>1</td>
+                        <td><code>0x6200</code></td>
+                        <td><code>0xFFFF</code> / <code>0x0000</code> / <code>0x720x</code></td>
+                        <td>Poll for connected slaves; <code>0x720x</code> identifies slave bitmask <code>x</code> (clients <code>1..3</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>2</td>
+                        <td><code>0x610y</code></td>
+                        <td><code>0x720x</code></td>
+                        <td>Confirm recognized client mask <code>y</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>3</td>
+                        <td><code>hdr[0x00..0xBE]</code></td>
+                        <td><code>0x000x</code></td>
+                        <td>Transfer 96 halfwords (<code>0xC0</code>-byte header) unencrypted; slave verifies logo and complement check.</td>
+                    </tr>
+                    <tr>
+                        <td>4</td>
+                        <td><code>0x6200</code> / <code>0x620y</code></td>
+                        <td><code>0x000x</code> / <code>0x720x</code></td>
+                        <td>Confirm header receipt and re-exchange client status.</td>
+                    </tr>
+                    <tr>
+                        <td>5</td>
+                        <td><code>0x63pp</code></td>
+                        <td><code>0x73cc</code></td>
+                        <td>Master sends <code>palette_data</code> (<code>pp</code>); slaves return <code>client_data</code> (<code>cc</code>) for encryption seed <code>m</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>6</td>
+                        <td><code>0x64hh</code></td>
+                        <td><code>0x73rr</code></td>
+                        <td>Master sends <code>handshake_data</code> (<code>hh</code>); slaves return random bytes (<code>rr</code>) for final CRC seed <code>f</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>7</td>
+                        <td><code>SWI 0x25</code> stream</td>
+                        <td>Ack / echo</td>
+                        <td>Encrypted 32-bit words from <code>0x0C0</code> to <code>boot_endp</code> (sent as 32-bit in Normal mode or 2&times;16-bit in MultiPlay).</td>
+                    </tr>
+                    <tr>
+                        <td>8</td>
+                        <td><code>0x0065</code> / <code>0x0066</code> + CRC16</td>
+                        <td><code>0x0075</code> / CRC16</td>
+                        <td>Both sides exchange 16-bit CRC; on match, slaves stamp <code>0x020000C4..C5</code> and jump to <code>0x020000C0</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <div class="table-scroll" role="region" aria-label="Boot Mode and JoyBus Commands" tabindex="0">
+            <table class="format-counts">
+                <caption>Boot Mode (0x0C4), Client ID (0x0C5) &amp; JoyBus Command Bytes</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Subsystem</th>
+                        <th scope="col">Value</th>
+                        <th scope="col">Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Boot Mode (<code>0x0C4</code>)</td>
+                        <td><code>0x01</code></td>
+                        <td>Booted via <strong>JoyBus</strong> mode (jumps to <code>0x020000E0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>Boot Mode (<code>0x0C4</code>)</td>
+                        <td><code>0x02</code></td>
+                        <td>Booted via <strong>Normal</strong> 32-bit SIO mode (jumps to <code>0x020000C0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>Boot Mode (<code>0x0C4</code>)</td>
+                        <td><code>0x03</code></td>
+                        <td>Booted via <strong>MultiPlay</strong> 16-bit mode (jumps to <code>0x020000C0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>Client ID (<code>0x0C5</code>)</td>
+                        <td><code>0x01</code>..<code>0x03</code></td>
+                        <td>Slave player index assigned by BIOS in Normal/MultiPlay modes (<code>0x0C5</code> is not overwritten in JoyBus mode).</td>
+                    </tr>
+                    <tr>
+                        <td>JoyBus Cmd</td>
+                        <td><code>0x00</code></td>
+                        <td><strong>Reset / Status:</strong> Resets JoyBus state and returns 16-bit device ID + <code>JSTAT</code> status byte.</td>
+                    </tr>
+                    <tr>
+                        <td>JoyBus Cmd</td>
+                        <td><code>0x14</code></td>
+                        <td><strong>Read (<code>JOY_TRANS</code>):</strong> Host reads 4 bytes written by GBA into <code>0x04000154</code> + <code>JSTAT</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>JoyBus Cmd</td>
+                        <td><code>0x15</code></td>
+                        <td><strong>Write (<code>JOY_RECV</code>):</strong> Host writes 4 bytes into GBA <code>0x04000150</code> and receives <code>JSTAT</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Palette Data Byte Formula (<code>0x1C</code> in <code>MultiBootParam</code>)</h3>
+        <pre><code># Animated palette mode:
+palette_data = 0x81 + (color * 0x10) + (direction * 0x08) + (speed * 0x02)
+# Fixed palette mode:
+palette_data = 0xF1 + (color * 0x02)
+# Ranges: color in 0..6, direction in {0, 1}, speed in 0..3</code></pre>
+
+        <h3>MultiBoot Rolling Encryption &amp; CRC16 Formulas (<code>SWI 0x25</code>)</h3>
+        <pre><code>if normal_mode:
+    c = 0xC387; x = 0xC37B; k = 0x43202F2F  # "C //"
+else: # multiplay_mode
+    c = 0xFFF8; x = 0xA517; k = 0x6465646F  # "dedo"
+
+m = (palette_data) | (client_data[0] &lt;&lt; 8) | (client_data[1] &lt;&lt; 16) | (client_data[2] &lt;&lt; 24)
+f = (handshake_data) | (rand[0] &lt;&lt; 8) | (rand[1] &lt;&lt; 16) | (rand[2] &lt;&lt; 24)
+
+for ptr in range(0x00C0, payload_end, 4):
+    w = read_u32le(image, ptr)
+    c ^= w
+    for bit in range(32):
+        lsb = c &amp; 1
+        c &gt;&gt;= 1
+        if lsb: c ^= x
+    m = (0x6F646573 * m + 1) &amp; 0xFFFFFFFF  # 0x6F646573 = "odes"
+    enc = (w ^ ((-0x02000000 - ptr) &amp; 0xFFFFFFFF) ^ m ^ k) &amp; 0xFFFFFFFF
+    transmit_word(enc)
+
+c ^= f
+for bit in range(32):
+    lsb = c &amp; 1
+    c &gt;&gt;= 1
+    if lsb: c ^= x
+# Final 16-bit CRC is (c &amp; 0xFFFF)</code></pre>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Payload Size Bounds &amp; Alignment:</strong> Transfer body length (<code>boot_endp - boot_srcp</code>, excluding the initial <code>0xC0</code> header) must be a multiple of <code>0x10</code> bytes, with a minimum of <code>0x100</code> bytes and a maximum of <code>0x3FF40</code> bytes (total image max <code>0x40000</code> = 256 KiB, fitting entirely in EWRAM <code>0x02000000&ndash;0x0203FFFF</code>).</li>
+            <li><strong>ROM vs. Multiboot Entrypoint Branching:</strong> Static analyzers and loaders must check which entrypoint is valid. A pure <code>.mb</code> image may contain a placeholder or dummy loop at <code>0x000</code> and its real ARM branch at <code>0x0C0</code> (with base address <code>0x02000000</code>). Conversely, a JoyBus-only boot targets <code>0x020000E0</code>.</li>
+            <li><strong>BIOS Overwrite of <code>0x020000C4&ndash;0x020000C5</code>:</strong> Executable instructions or constants placed at offsets <code>0x0C4&ndash;0x0C5</code> will be clobbered by the slave BIOS before jumping to <code>0x020000C0</code> or <code>0x020000E0</code>.</li>
+            <li><strong>Logo &amp; Complement Check Still Apply:</strong> Even though Multiboot runs from EWRAM, the slave BIOS still checks the 156-byte Nintendo Logo, fixed byte <code>0x96</code> at <code>0x0B2</code>, and complement check at <code>0x0BD</code> during the unencrypted header phase.</li>
+            <li><strong>Generalized EWRAM Loader Mapping:</strong> Map the full <code>.mb</code> binary (<code>0x000..len</code>) starting at EWRAM base <code>0x02000000</code> (not <code>0x08000000</code>), initialize simulated BIOS stamp bytes <code>0x020000C4</code> (boot mode) and <code>0x020000C5</code> (client ID), and branch in ARM state to <code>0x020000C0</code> (or <code>0x020000E0</code> for JoyBus).</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function parse_and_load_multiboot(bytes, boot_mode = 0x02, client_id = 0x01):
+    if len(bytes) &lt; 0x1C0:
+        error("Image too small for 0xC0 header + 0x100 minimum Multiboot payload")
+    if len(bytes) &gt; 0x40000:
+        error("Multiboot image exceeds 256 KiB EWRAM capacity (0x40000 bytes)")
+
+    body_size = len(bytes) - 0x0C0
+    if (body_size % 0x10) != 0:
+        warn("Multiboot payload length (len - 0xC0) is not 16-byte aligned")
+
+    # Validate shared 0x000..0x0BF header fields
+    rom_hdr = parse_gba_rom_header(bytes[0x000 : 0x0C0])
+    if not rom_hdr.logo_valid or not rom_hdr.fixed_byte_valid or not rom_hdr.checksum_valid:
+        warn("Multiboot header failed BIOS logo / 0x96 / complement validation")
+
+    ram_branch = read_u32le(bytes, 0x0C0)
+    joy_branch = read_u32le(bytes, 0x0E0) if len(bytes) &gt;= 0x0E4 else 0
+
+    function decode_ewram_branch(opcode, pc_addr):
+        if ((opcode &gt;&gt; 24) &amp; 0xFF) != 0xEA:
+            return null
+        imm24 = opcode &amp; 0x00FFFFFF
+        if (imm24 &amp; 0x00800000) != 0:
+            imm24 -= 0x01000000
+        return (pc_addr + 8 + (imm24 &lt;&lt; 2)) &amp; 0xFFFFFFFF
+
+    ram_target = decode_ewram_branch(ram_branch, 0x020000C0)
+    joy_target = decode_ewram_branch(joy_branch, 0x020000E0)
+
+    # Generalized EWRAM loader mapping
+    map_region(base=0x02000000, data=bytes[0 : len(bytes)])
+    write_u8(0x020000C4, boot_mode)   # 0x01=JoyBus, 0x02=Normal, 0x03=MultiPlay
+    if boot_mode in (0x02, 0x03):
+        write_u8(0x020000C5, client_id)
+
+    start_pc = 0x020000E0 if boot_mode == 0x01 else 0x020000C0
+    return { rom_hdr, ram_target, joy_target, start_pc, body_size }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>The extended header layout (<code>0x0C0&ndash;0x0E3</code>), BIOS <code>SWI 0x25</code> <code>MultiBootParam</code> offsets, payload size limits (<code>0x100..0x3FF40</code>), Normal/MultiPlay handshake frames, and the rolling encryption/CRC16 formulas are <span class="badge confidence-confirmed">Confirmed Hardware/BIOS Spec</span> details established by GBA BIOS disassembly and GBATEK documentation.</p>
+        <aside class="callout-warn" aria-label="Multiboot protocol caveats">
+            <p><strong>Reserved &amp; Protocol Caveats:</strong> Fields marked <code>reserved1</code>, <code>reserved2</code>, <code>reserved3</code>, and <code>system_work2</code> in <code>MultiBootParam</code> are BIOS-internal scratch areas (<span class="badge confidence-reserved">Reserved</span>) and should not be read or modified by user code after invoking <code>SWI 0x25</code>. For JoyBus transfers, timing requirements and host-side poll intervals depend on the external JoyBus master hardware (e.g., GameCube SIO) rather than fixed GBA BIOS delays.</p>
+        </aside>
+    </section>
+</body>
+</html>

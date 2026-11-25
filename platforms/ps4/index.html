@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PlayStation 4 (Orbis) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><span>PlayStation 4</span>
+    </nav>
+
+    <h1>PlayStation 4 (Orbis)</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">PLATFORM ARCHITECTURE &amp; FORMAT INDEX</p>
+        <p>Eighth-generation Sony home console built on an AMD64 (x86-64) Jaguar APU and a FreeBSD-derived Orbis OS kernel. Platform storage spans encrypted Blu-ray optical discs, CNT <code>.pkg</code> digital packages containing PFS filesystem images, and signed/encrypted ELF64 executables wrapped in Orbis SELF containers.</p>
+        <dl>
+            <dt>CPU / ISA</dt>
+            <dd>AMD64 (x86-64) 8-core Jaguar (little-endian, 64-bit virtual addressing)</dd>
+            <dt>Operating System</dt>
+            <dd>Orbis OS (FreeBSD 9-derived kernel with custom SCE syscalls, SAMU security co-processor, and NID dynamic linker)</dd>
+            <dt>Memory &amp; Media</dt>
+            <dd>8 GB unified GDDR5 (Pro adds 1 GB DDR3); Blu-ray BD-ROM (UDF/ISO-9660), CNT <code>.pkg</code>, and PlayGo streaming PFS images</dd>
+            <dt>Endianness Rule</dt>
+            <dd>Hybrid: little-endian x86-64 SELF/ELF64, <code>param.sfo</code>, PFS, and <code>playgo-chunk.dat</code>; big-endian CNT <code>.pkg</code> and <code>trophy00.trp</code> headers</dd>
+        </dl>
+    </section>
+
+    <div class="badge-group">
+        <span class="scope-badge">Platform-Inherited Only</span>
+        <span class="badge confidence-confirmed">x86-64 / Orbis ABI</span>
+        <span class="badge confidence-revision">Hybrid LE / BE Containers</span>
+    </div>
+
+    <section class="section" id="overview">
+        <h2>Platform Architecture &amp; Execution Pipeline</h2>
+        <p>Unlike the Cell Broadband Engine on PlayStation 3, the PlayStation 4 standardizes user-mode code on 64-bit x86-64 (<code>EM_X86_64</code>) inside a modified FreeBSD ELF64 ABI. Executables (<code>eboot.bin</code>) and dynamic libraries (<code>.prx</code> / <code>.sprx</code>) are wrapped in the Orbis <strong>SELF</strong> container (<code>0x1D3D154F</code>), which adds segment encryption/signing descriptors and process entitlement blocks verified by the Secure Asset Management Unit (SAMU) before mapping ELF64 segments into virtual memory.</p>
+        <ul>
+            <li><strong>Application Packaging (<code>.pkg</code> / PFS):</strong> Digital releases, patches, and add-on content are distributed in big-endian <strong>CNT</strong> <code>.pkg</code> archives (<code>\x7FCNT</code>). Metadata entries (such as <code>param.sfo</code>, icons, PlayGo chunk tables, and license records) reside directly in the PKG entry table, while the main application tree lives inside an embedded little-endian <strong>PFS</strong> (PlayStation File System) image.</li>
+            <li><strong>Progressive Installation (PlayGo):</strong> Large titles split their PFS payload into addressable chunk ranges described by <code>playgo-chunk.dat</code> (<code>plgo</code>) and <code>playgo-manifest.xml</code> so the system shell can launch an application once initial chunks are installed.</li>
+            <li><strong>System Metadata &amp; Trophies (<code>sce_sys/</code>):</strong> Every mounted Orbis application exposes a standardized <code>sce_sys/</code> directory holding <code>param.sfo</code>, shell art, <code>playgo-chunk.dat</code>, and <code>trophy/trophy00.trp</code>.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Hybrid Endianness Caveat:</strong> While the x86-64 CPU, Orbis ELF64/SELF, <code>param.sfo</code>, <code>playgo-chunk.dat</code>, and PFS superblocks/inodes are <strong>little-endian</strong>, Sony carried forward <strong>big-endian</strong> outer container headers for PS4 CNT <code>.pkg</code> packages and <code>trophy00.trp</code> trophy archives. Parsers must switch byte order at the container boundary.</p>
+        </aside>
+    </section>
+
+    <section class="section" id="formats">
+        <h2>Platform-Inherited Format Specifications</h2>
+        <div class="platform-grid">
+            <article class="platform-card">
+                <div class="platform-card-header">
+                    <a class="platform-card-title" href="../../index.html#ps4-self-fself" target="_top">Orbis SELF / FSELF &amp; ELF64</a>
+                    <span class="badge confidence-confirmed">Executable ABI</span>
+                </div>
+                <p class="platform-card-meta"><code>eboot.bin</code>, <code>.prx</code>, <code>.sprx</code> — Little-endian <code>0x1D3D154F</code> SELF wrapper, 32-byte segment entries, ELF64-x86_64, <code>PT_SCE_*</code> headers, and NID dynamic linking.</p>
+                <ul class="platform-card-formats">
+                    <li><a href="../../index.html#ps4-self-fself" target="_top"><span>Read Specification</span><code>#ps4-self-fself</code></a></li>
+                </ul>
+            </article>
+
+            <article class="platform-card">
+                <div class="platform-card-header">
+                    <a class="platform-card-title" href="../../index.html#ps4-param-sfo" target="_top">param.sfo (Orbis PSF)</a>
+                    <span class="badge confidence-confirmed">System Metadata</span>
+                </div>
+                <p class="platform-card-meta"><code>param.sfo</code> — Little-endian <code>\x00PSF</code> key/value registry storing <code>TITLE_ID</code>, <code>CONTENT_ID</code>, <code>APP_VER</code>, <code>SYSTEM_VER</code>, <code>PARENTAL_LEVEL</code>, and <code>ATTRIBUTE</code> / <code>ATTRIBUTE2</code> bitmasks.</p>
+                <ul class="platform-card-formats">
+                    <li><a href="../../index.html#ps4-param-sfo" target="_top"><span>Read Specification</span><code>#ps4-param-sfo</code></a></li>
+                </ul>
+            </article>
+
+            <article class="platform-card">
+                <div class="platform-card-header">
+                    <a class="platform-card-title" href="../../index.html#ps4-pkg" target="_top">PS4 .pkg (CNT) &amp; PFS</a>
+                    <span class="badge confidence-revision">Hybrid BE / LE</span>
+                </div>
+                <p class="platform-card-meta"><code>.pkg</code> — Big-endian <code>\x7FCNT</code> container header and 32-byte entry table wrapping encrypted system entries and an embedded little-endian PFS superblock / <code>uroot</code> filesystem.</p>
+                <ul class="platform-card-formats">
+                    <li><a href="../../index.html#ps4-pkg" target="_top"><span>Read Specification</span><code>#ps4-pkg</code></a></li>
+                </ul>
+            </article>
+
+            <article class="platform-card">
+                <div class="platform-card-header">
+                    <a class="platform-card-title" href="../../index.html#ps4-gp4-trophy" target="_top">Trophy, PlayGo &amp; sce_sys/</a>
+                    <span class="badge confidence-confirmed">Shell &amp; Layout</span>
+                </div>
+                <p class="platform-card-meta"><code>trophy00.trp</code>, <code>playgo-chunk.dat</code>, <code>sce_sys/</code> — Big-endian <code>0xDCA24D00</code> trophy archive, little-endian <code>plgo</code> chunk/scenario manifest, and standard Orbis application directory tree.</p>
+                <ul class="platform-card-formats">
+                    <li><a href="../../index.html#ps4-gp4-trophy" target="_top"><span>Read Specification</span><code>#ps4-gp4-trophy</code></a></li>
+                </ul>
+            </article>
+        </div>
+    </section>
+
+    <section class="section" id="app-tree">
+        <h2>Standard Orbis Application Layout</h2>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Canonical PlayStation 4 Application &amp; Mounted PFS Tree</caption>
+                <thead>
+                    <tr>
+                        <th>Path</th>
+                        <th>Container / Format</th>
+                        <th>Endianness</th>
+                        <th>Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>eboot.bin</code></td>
+                        <td>Orbis SELF (<code>0x1D3D154F</code>)</td>
+                        <td>Little-endian</td>
+                        <td>Primary application ELF64-x86_64 executable launched by the Orbis kernel</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_module/*.prx</code></td>
+                        <td>Orbis SELF PRX</td>
+                        <td>Little-endian</td>
+                        <td>System/SDK dynamic libraries (e.g., <code>libc.prx</code>, <code>libSceFios2.prx</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/param.sfo</code></td>
+                        <td>PSF (<code>\x00PSF</code>)</td>
+                        <td>Little-endian</td>
+                        <td>Title ID, content ID, version, parental rating, and OS feature flags</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/playgo-chunk.dat</code></td>
+                        <td>PLGO (<code>plgo</code>)</td>
+                        <td>Little-endian</td>
+                        <td>Progressive install chunk extents and scenario activation tables</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/trophy/trophy00.trp</code></td>
+                        <td>TRP (<code>0xDCA24D00</code>)</td>
+                        <td>Big-endian</td>
+                        <td>Encrypted trophy XML configs (<code>.ESFM</code>) and PNG trophy badges</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/icon0.png</code>, <code>pic0.png</code>, <code>pic1.png</code>, <code>snd0.at9</code></td>
+                        <td>PNG / ATRAC9</td>
+                        <td>Format-native</td>
+                        <td>Orbis home screen icon, overlay, background art, and background audio</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</body>
+</html>

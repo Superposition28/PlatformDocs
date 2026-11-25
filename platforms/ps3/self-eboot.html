@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EBOOT.BIN / SELF / SPRX (PS3 Signed ELF) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps3" target="_top">PlayStation 3</a><span>/</span><span>EBOOT.BIN / SELF / SPRX</span>
+    </nav>
+
+    <h1>EBOOT.BIN / SELF / SPRX (PS3 Signed ELF)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">PlayStation 3 Executable &amp; Shared Library Format</p>
+        <p><strong>SELF</strong> (Signed ELF) is Sony Computer Entertainment's encrypted and ECDSA-signed container wrapping CellOS 64-bit big-endian PowerPC executables (<code>EBOOT.BIN</code>, <code>*.self</code>) and relocatable dynamic modules (<code>*.sprx</code>), as well as standalone SPU modules. Unencrypted metadata mirrors ELF headers outside the ciphertext so loaders can validate alignment and allocate segments prior to decryption.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>USRDIR/EBOOT.BIN</code>, <code>*.self</code>, <code>*.sprx</code>, <code>*.sdat</code> (unwrapped SDK outputs: <code>*.elf</code>, <code>*.prx</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>53 43 45 00</code> (<code>0x53434500</code>, ASCII <code>"SCE\0"</code>); inner ELF magic <code>7F 45 4C 46</code> (<code>"\x7FELF"</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian (<code>BE</code>) for all SCE/SELF headers, ELF64-PPC64 payloads, and embedded ELF32-SPU images</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 3 CellOS (LV2 kernel <code>EI_OSABI = 0x66</code>) &amp; LV1/LV0 security loaders</dd>
+            <dt>Role/MIME</dt>
+            <dd>Signed executable / shared library container (<code>application/x-ps3-self</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">Identification &amp; Scope</a></li>
+            <li><a href="#layout">Binary Layout Tables</a></li>
+            <li><a href="#flags">Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">Parser Pseudocode</a></li>
+            <li><a href="#provenance">Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Every signed PlayStation 3 binary begins with the 32-byte <strong>SCE Common Header</strong> identified by magic <code>0x53434500</code> (<code>53 43 45 00</code>, ASCII <code>"SCE\0"</code>). When <code>category == 1</code> (SELF), the file embeds an Extended SELF Header, Application Info, plaintext copies of the ELF64 header and program headers, a Section Info table, optional SCE Version and Control Info records (including NPDRM blocks), an encrypted <strong>Metadata</strong> region containing per-segment AES-128 keys/IVs and SHA-1 digests, an ECDSA signature, and finally the encrypted (and optionally zlib-compressed) ELF segment payloads.</p>
+        <p>Unlike <code>PARAM.SFO</code> (which is little-endian), the entire SELF envelope and its contained CellOS PPU/SPU ELF binaries are strictly <strong>big-endian</strong>. Decryption of a retail SELF strips the outer SCE wrapper to reconstruct a standard big-endian ELF64 (<code>e_machine = 0x0015</code>, <code>EM_PPC64</code>) or ELF32 (<code>e_machine = 0x0017</code>, <code>EM_SPU</code>) image.</p>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>SCE Common Header (32 bytes, offset 0x00..0x1F)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>magic</code></td>
+                        <td>Container signature: <code>0x53434500</code> (<code>"SCE\0"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>version</code></td>
+                        <td>SCE header format version: <code>2</code> on standard PS3 retail binaries; <code>3</code> in newer/extended SCE revisions.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>key_revision</code></td>
+                        <td>Key revision / attribute selector (e.g., <code>0x0001</code>..<code>0x001C</code>; bit 15 <code>0x8000</code> marks debug/FSELF).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0A</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>category</code></td>
+                        <td>SCE container category: <code>1</code> = SELF, <code>2</code> = RVK, <code>3</code> = PKG, <code>4</code> = SPP.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>metadata_offset</code></td>
+                        <td>Offset of <code>MetadataInfo</code> relative to <code>0x20</code> (<code>file_offset = 0x20 + metadata_offset</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>header_len</code></td>
+                        <td>Total SCE header length in bytes; segment payload data begins at or after this offset.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>data_len</code></td>
+                        <td>Declared payload length (size of embedded ELF data or encrypted payload region).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Extended SELF Header (72 bytes, offset 0x20..0x67, followed by 8-byte padding)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>header_type</code></td>
+                        <td>Extended header format type (<code>3</code> for PS3 SELF).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>app_info_offset</code></td>
+                        <td>Absolute file offset of the <code>AppInfoHeader</code> (typically <code>0x70</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>elf_offset</code></td>
+                        <td>Absolute file offset of the embedded ELF64/ELF32 header copy (typically <code>0x90</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x38</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>phdr_offset</code></td>
+                        <td>Absolute file offset of the ELF Program Header table copy (typically <code>0xD0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x40</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>shdr_offset</code></td>
+                        <td>Absolute file offset of the ELF Section Header table copy, or <code>0</code> if stripped.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x48</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>section_info_offset</code></td>
+                        <td>Absolute file offset of the <code>SectionInfo[]</code> array (one entry per program header).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x50</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>sce_version_offset</code></td>
+                        <td>Absolute file offset of the <code>SceVersionInfo</code> record, or <code>0</code> if omitted.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x58</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>control_info_offset</code></td>
+                        <td>Absolute file offset of the chained <code>ControlInfo</code> records, or <code>0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x60</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>control_info_size</code></td>
+                        <td>Total byte length of all chained <code>ControlInfo</code> records.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>AppInfoHeader (32 bytes, at <code>app_info_offset</code>)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>auth_id</code></td>
+                        <td>64-bit Program Authentication ID (privilege/capability identity checked against keyset).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>vendor_id</code></td>
+                        <td>Licensee/vendor identifier (typically <code>0x01000002</code> for retail software).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>self_type</code></td>
+                        <td>Binary execution domain (e.g., <code>4</code> = Application, <code>5</code> = Isolated SPU, <code>8</code> = NPDRM).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>version</code></td>
+                        <td>Packed SDK/application version (e.g., <code>0x0001000000000000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>padding</code></td>
+                        <td>Reserved zero padding.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>SectionInfo Entry (32 bytes per entry, count = <code>e_phnum</code>, at <code>section_info_offset</code>)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>offset</code></td>
+                        <td>Absolute file offset of this segment's data inside the SELF file.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>size</code></td>
+                        <td>Stored byte size in the SELF file (compressed size if <code>compressed == 2</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>compressed</code></td>
+                        <td><code>1</code> = uncompressed, <code>2</code> = zlib deflate stream.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>unknown_0</code></td>
+                        <td>Reserved/segment flag word (usually <code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>unknown_1</code></td>
+                        <td>Reserved word (usually <code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>encrypted</code></td>
+                        <td><code>0</code> = plaintext/debug segment, <code>1</code> = AES-128-CTR encrypted.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>ControlInfo Record Header &amp; NPDRM Sub-Record (at <code>control_info_offset</code>)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>type</code></td>
+                        <td>Record type: <code>1</code> = Control Flags, <code>2</code> = File Digest (SHA-1), <code>3</code> = NPDRM Info.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>size</code></td>
+                        <td>Total byte length of this control record (including this 16-byte header).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>next</code></td>
+                        <td>Continuation flag: <code>1</code> if another record follows immediately, <code>0</code> if final.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>npd.magic</code></td>
+                        <td>(Type <code>3</code> only, <code>0x90</code>B total) NPDRM signature <code>0x4E504400</code> (<code>"NPD\0"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>npd.version</code></td>
+                        <td>(Type <code>3</code>) NPD structure version (<code>1</code>..<code>4</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>npd.drm_type</code></td>
+                        <td>(Type <code>3</code>) License mode: <code>1</code> = Network, <code>2</code> = Local, <code>3</code> = Free.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>npd.app_type</code></td>
+                        <td>(Type <code>3</code>) <code>0</code> = Module/SPRX, <code>1</code> = Executable/EBOOT, <code>0x20</code>/<code>0x30</code> = Update/EDAT.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>48</td>
+                        <td><code>char[48]</code></td>
+                        <td><code>npd.content_id</code></td>
+                        <td>(Type <code>3</code>) NUL-padded 36-char PSN Content ID (maps to <code>.rap</code>/<code>.rif</code> license).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x50</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>npd.digest</code></td>
+                        <td>(Type <code>3</code>) File/header verification digest.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x60</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>npd.title_hash</code></td>
+                        <td>(Type <code>3</code>) Title/klicensee CMAC hash (used in NPDRM key unwrapping).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x70</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>npd.dev_hash</code></td>
+                        <td>(Type <code>3</code>) Developer/ECDSA-derived verification hash.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x80</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>npd.activate_time</code></td>
+                        <td>(Type <code>3</code>) Optional activation timestamp (<code>0</code> if unrestricted).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x88</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>npd.expire_time</code></td>
+                        <td>(Type <code>3</code>) Optional expiration timestamp (<code>0</code> if permanent).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>MetadataInfo (64 bytes, at <code>0x20 + metadata_offset</code>) &amp; MetadataHeader (32 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>meta_key</code></td>
+                        <td>(In <code>MetadataInfo</code>) AES-128 key protecting <code>MetadataHeader</code> and section key tables.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>meta_key_pad</code></td>
+                        <td>(In <code>MetadataInfo</code>) Zero padding verified upon AES-256-CBC decryption.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>meta_iv</code></td>
+                        <td>(In <code>MetadataInfo</code>) AES-128-CTR IV for decrypting <code>MetadataHeader</code> onward.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>meta_iv_pad</code></td>
+                        <td>(In <code>MetadataInfo</code>) Zero padding verified upon AES-256-CBC decryption.</td>
+                    </tr>
+                    <tr>
+                        <td><code>+0x00</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>sig_input_length</code></td>
+                        <td>(In <code>MetadataHeader</code>) Byte count from file offset <code>0x00</code> covered by ECDSA signature.</td>
+                    </tr>
+                    <tr>
+                        <td><code>+0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>unknown_0</code></td>
+                        <td>(In <code>MetadataHeader</code>) Version/flags word (typically <code>1</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>+0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>section_count</code></td>
+                        <td>(In <code>MetadataHeader</code>) Number of 48-byte <code>MetadataSectionHeader</code> records.</td>
+                    </tr>
+                    <tr>
+                        <td><code>+0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>key_count</code></td>
+                        <td>(In <code>MetadataHeader</code>) Number of 16-byte slots in the key/IV/SHA-1 table.</td>
+                    </tr>
+                    <tr>
+                        <td><code>+0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>opt_header_size</code></td>
+                        <td>(In <code>MetadataHeader</code>) Byte size of trailing capability/SDK optional headers.</td>
+                    </tr>
+                    <tr>
+                        <td><code>+0x18</code></td>
+                        <td>8</td>
+                        <td><code>u8[8]</code></td>
+                        <td><code>reserved</code></td>
+                        <td>(In <code>MetadataHeader</code>) Reserved zero fields.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>MetadataSectionHeader (48 bytes each, <code>section_count</code> entries after <code>MetadataHeader</code>)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>data_offset</code></td>
+                        <td>Absolute file offset of the encrypted/compressed segment payload.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>data_size</code></td>
+                        <td>Stored byte size of the segment payload.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>type</code></td>
+                        <td>Segment type: <code>1</code> = SPU/SHDR, <code>2</code> = PHDR (LOAD), <code>3</code> = SCE/Note.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>program_idx</code></td>
+                        <td>Index into the ELF <code>Phdr[]</code> table corresponding to this segment.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>hashed</code></td>
+                        <td><code>2</code> if a 20-byte SHA-1 hash is stored in the key table at <code>sha1_idx</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>sha1_idx</code></td>
+                        <td>16-byte slot index into the key table for the segment SHA-1 digest (or <code>0xFFFFFFFF</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>encrypted</code></td>
+                        <td><code>3</code> = AES-128-CTR encrypted, <code>1</code> = unencrypted.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x24</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>key_idx</code></td>
+                        <td>16-byte slot index for AES-128 segment key (or <code>0xFFFFFFFF</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>iv_idx</code></td>
+                        <td>16-byte slot index for AES-128-CTR segment IV (or <code>0xFFFFFFFF</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>compressed</code></td>
+                        <td><code>2</code> = zlib deflate compressed, <code>1</code> = uncompressed.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+        <ul>
+            <li><strong>SCE <code>category</code> (<code>0x0A</code>):</strong> <code>1</code> = SELF executable/PRX, <code>2</code> = RVK (revocation list), <code>3</code> = PKG/other SCE data, <code>4</code> = SPP (security policy profile).</li>
+            <li><strong>SCE <code>key_revision</code> / <code>attribute</code> (<code>0x08</code>):</strong> Lower bits encode the firmware key-generation era (<code>0x0001</code>..<code>0x001C+</code> across PS3 system software releases); bit 15 (<code>0x8000</code>) denotes an unencrypted debug / Fake SELF (FSELF) used on development kits.</li>
+            <li><strong><code>AppInfoHeader.self_type</code> (<code>+0x0C</code>):</strong>
+                <ul>
+                    <li><code>1</code> = LV0 bootloader, <code>2</code> = LV1 hypervisor, <code>3</code> = LV2 CellOS kernel</li>
+                    <li><code>4</code> = Standard Disc/HDD Application (<code>EBOOT.BIN</code> / <code>.sprx</code>)</li>
+                    <li><code>5</code> = Isolated SPU Module, <code>6</code> = Secure Loader</li>
+                    <li><code>8</code> = NPDRM Application / Module (requires <code>ControlInfo</code> type <code>3</code> <code>NPD\0</code> key unwrap)</li>
+                </ul>
+            </li>
+            <li><strong>Segment Encryption &amp; Compression Mapping:</strong>
+                <ul>
+                    <li><code>SectionInfo.compressed == 2</code> (or <code>MetadataSectionHeader.compressed == 2</code>): payload must be decrypted first (if encrypted), then inflated via standard RFC 1950 zlib (<code>0x78</code> CMF header) into the ELF segment buffer of size <code>Phdr.p_filesz</code>.</li>
+                    <li><code>MetadataSectionHeader.encrypted == 3</code>: decrypt with AES-128-CTR using <code>key_table[key_idx]</code> and <code>key_table[iv_idx]</code> (counter incremented per 16-byte block).</li>
+                </ul>
+            </li>
+            <li><strong>Key Table Indexing Formula:</strong> Each slot in the metadata key table is 16 bytes wide, starting at <code>key_table_offset = metadata_header_end + section_count * 0x30</code>. A 20-byte SHA-1 digest occupies two consecutive slots (32 bytes, padded with 12 trailing zero bytes), while an AES key or IV occupies one slot (16 bytes).</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader / Parser Rules</h2>
+        <ul>
+            <li><strong>SCE Header Version 2 vs Version 3:</strong> Standard PS3 executables and SPRX files use <code>version = 2</code>, where <code>metadata_offset</code> at <code>0x0C</code> is relative to <code>0x20</code> and <code>header_len</code>/<code>data_len</code> are <code>u64be</code>. Version <code>3</code> headers appear in certain later SCE tools/platforms and may adjust extended header alignment or add additional <code>ControlInfo</code> / capability blocks; parsers should reject unsupported <code>version</code> values unless explicitly handled.</li>
+            <li><strong>Debug / FSELF vs Retail Encrypted SELF:</strong> When <code>(key_revision &amp; 0x8000) != 0</code> or <code>SectionInfo.encrypted == 0</code> for all segments, segment payloads are stored unencrypted (though they may still be zlib-compressed). In retail SELFs, <code>MetadataInfo</code> must be decrypted before segment keys are known.</li>
+            <li><strong>NPDRM vs Non-NPDRM Key Unwrapping:</strong> If <code>self_type == 8</code> (or a Type <code>3</code> <code>NPD\0</code> control record is present), the <code>MetadataInfo</code> decryption layer requires the 16-byte title <code>klicensee</code> (obtained from a console <code>.rif</code>/<code>.rap</code> or free license table) mixed with the SCE NPDRM key prior to AES-256-CBC unwrapping.</li>
+            <li><strong>Zlib-Compressed Segments &amp; ELF Reconstruction:</strong> When reconstructing an ELF from a decrypted SELF, copy the plaintext ELF header (<code>elf_offset</code>) and program headers (<code>phdr_offset</code>), and optionally the section headers (<code>shdr_offset</code> if non-zero), then write each decompressed segment at its ELF <code>Phdr[program_idx].p_offset</code> (NOT the SELF <code>data_offset</code>).</li>
+            <li><strong>Generalized CellOS PPU ELF64 Loader Mapping:</strong>
+                <ul>
+                    <li><code>EI_OSABI = 0x66</code> (CellOS LV2), <code>e_machine = 0x0015</code> (PPC64), <code>e_type = 0x0002</code> (<code>ET_EXEC</code>) or <code>0xFFA4</code> (<code>ET_SCE_PPURELEXEC</code> for SPRX).</li>
+                    <li><strong>OPD &amp; TOC:</strong> <code>e_entry</code> points to an 8-byte (or 16-byte) Procedure Descriptor <code>{ u64be code_vaddr, u64be toc_vaddr }</code>; the loader sets <code>PC = code_vaddr</code> and <code>r2 = toc_vaddr</code>.</li>
+                    <li><strong><code>PT_PROC_PARAM</code> (<code>0x60000001</code>) &amp; <code>PT_PROC_PRX</code> (<code>0x60000002</code>):</strong> Store process stack/SDK metadata and the <code>sys_prx_module_info_t</code> header describing PRX library export/import tables keyed by 32-bit <code>NID</code> hashes and stub descriptor addresses.</li>
+                    <li><strong>Embedded SPU ELFs:</strong> SPU programs appear either as standalone SELF files (<code>self_type == 5</code>) or as embedded 32-bit big-endian ELFs (<code>e_machine = 0x0017</code>, <code>EM_SPU</code>) inside PPU data segments loaded into 256 KiB SPU Local Stores.</li>
+                </ul>
+            </li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Parser Pseudocode</h2>
+        <pre><code>function parse_ps3_self(stream, key_resolver, klicensee = null):
+    sce_magic = read_u32be(stream, 0x00)
+    assert sce_magic == 0x53434500  // "SCE\0"
+    sce_version     = read_u32be(stream, 0x04)
+    key_revision    = read_u16be(stream, 0x08)
+    category        = read_u16be(stream, 0x0A)
+    metadata_offset = read_u32be(stream, 0x0C)
+    header_len      = read_u64be(stream, 0x10)
+    data_len        = read_u64be(stream, 0x18)
+
+    assert sce_version in (2, 3) and category == 1
+
+    // Extended SELF Header (0x20..0x67)
+    app_info_off     = read_u64be(stream, 0x28)
+    elf_off          = read_u64be(stream, 0x30)
+    phdr_off         = read_u64be(stream, 0x38)
+    shdr_off         = read_u64be(stream, 0x40)
+    section_info_off = read_u64be(stream, 0x48)
+    control_info_off = read_u64be(stream, 0x58)
+    control_info_sz  = read_u64be(stream, 0x60)
+
+    auth_id   = read_u64be(stream, app_info_off + 0x00)
+    self_type = read_u32be(stream, app_info_off + 0x0C)
+
+    // Walk ControlInfo chain for NPDRM ("NPD\0") if present
+    npd_record = null
+    if control_info_off != 0 and control_info_sz &gt; 0:
+        cur = control_info_off
+        while cur &lt; control_info_off + control_info_sz:
+            rec_type = read_u32be(stream, cur + 0x00)
+            rec_size = read_u32be(stream, cur + 0x04)
+            has_next = read_u64be(stream, cur + 0x08)
+            if rec_type == 3 and read_u32be(stream, cur + 0x10) == 0x4E504400:
+                npd_record = parse_npdrm_record(stream, cur)
+            if has_next == 0 or rec_size == 0:
+                break
+            cur += rec_size
+
+    // Parse embedded ELF header &amp; Phdr table
+    elf_class = read_u8(stream, elf_off + 0x04)  // 2 = ELF64 (PPU), 1 = ELF32 (SPU)
+    e_phoff   = read_u64be(stream, elf_off + 0x20) if elf_class == 2 else read_u32be(stream, elf_off + 0x1C)
+    e_phentsz = read_u16be(stream, elf_off + (0x36 if elf_class == 2 else 0x2A))
+    e_phnum   = read_u16be(stream, elf_off + (0x38 if elf_class == 2 else 0x2C))
+
+    phdr = []
+    out_elf_size = e_phoff + e_phnum * e_phentsz
+    for i in 0 .. e_phnum - 1:
+        p_base   = phdr_off + i * e_phentsz
+        p_offset = read_u64be(stream, p_base + 0x08) if elf_class == 2 else read_u32be(stream, p_base + 0x04)
+        p_filesz = read_u64be(stream, p_base + 0x20) if elf_class == 2 else read_u32be(stream, p_base + 0x10)
+        phdr.append({ p_offset: p_offset, p_filesz: p_filesz })
+        out_elf_size = max(out_elf_size, p_offset + p_filesz)
+
+    is_debug = (key_revision &amp; 0x8000) != 0
+    out_elf  = allocate_buffer(out_elf_size)
+    copy_bytes(stream, elf_off, out_elf, 0, 64 if elf_class == 2 else 52)
+    copy_bytes(stream, phdr_off, out_elf, e_phoff, e_phnum * e_phentsz)
+
+    if is_debug:
+        // Unencrypted FSELF path using SectionInfo[]
+        for i in 0 .. e_phnum - 1:
+            si_off     = section_info_off + i * 0x20
+            seg_off    = read_u64be(stream, si_off + 0x00)
+            seg_size   = read_u64be(stream, si_off + 0x08)
+            compressed = read_u32be(stream, si_off + 0x10)
+            raw = read_bytes(stream, seg_off, seg_size)
+            if compressed == 2:
+                raw = zlib_decompress(raw)
+            write_bytes(out_elf, phdr[i].p_offset, raw)
+        return out_elf
+
+    // Retail encrypted SELF path
+    meta_info_off = 0x20 + metadata_offset
+    (erk, riv) = key_resolver.derive_metadata_keys(self_type, key_revision, npd_record, klicensee)
+    enc_meta_info = read_bytes(stream, meta_info_off, 0x40)
+    if npd_record != null:
+        enc_meta_info[0x00..0x10] = aes128_ecb_decrypt(klicensee_np_key, enc_meta_info[0x00..0x10])
+    meta_info = aes256_cbc_decrypt(erk, riv, enc_meta_info)
+    assert meta_info[0x10..0x20] == zeros(16) and meta_info[0x30..0x40] == zeros(16)
+
+    meta_key = meta_info[0x00..0x10]
+    meta_iv  = meta_info[0x20..0x30]
+    enc_hdr_len = header_len - (meta_info_off + 0x40)
+    meta_body = aes128_ctr_decrypt(meta_key, meta_iv, read_bytes(stream, meta_info_off + 0x40, enc_hdr_len))
+
+    section_count = read_u32be(meta_body, 0x0C)
+    key_count     = read_u32be(meta_body, 0x10)
+    key_table_off = 0x20 + section_count * 0x30
+
+    for s in 0 .. section_count - 1:
+        sh_off      = 0x20 + s * 0x30
+        d_off       = read_u64be(meta_body, sh_off + 0x00)
+        d_size      = read_u64be(meta_body, sh_off + 0x08)
+        s_type      = read_u32be(meta_body, sh_off + 0x10)
+        prog_idx    = read_u32be(meta_body, sh_off + 0x14)
+        hashed      = read_u32be(meta_body, sh_off + 0x18)
+        sha1_idx    = read_u32be(meta_body, sh_off + 0x1C)
+        encrypted   = read_u32be(meta_body, sh_off + 0x20)
+        key_idx     = read_u32be(meta_body, sh_off + 0x24)
+        iv_idx      = read_u32be(meta_body, sh_off + 0x28)
+        compressed  = read_u32be(meta_body, sh_off + 0x2C)
+
+        seg = read_bytes(stream, d_off, d_size)
+        if encrypted == 3:
+            s_key = meta_body[key_table_off + key_idx * 16 .. +16]
+            s_iv  = meta_body[key_table_off + iv_idx  * 16 .. +16]
+            seg   = aes128_ctr_decrypt(s_key, s_iv, seg)
+        if hashed == 2:
+            expected_sha1 = meta_body[key_table_off + sha1_idx * 16 .. +20]
+            assert sha1(seg) == expected_sha1
+        if compressed == 2:
+            seg = zlib_decompress(seg)
+        if s_type == 2:  // PHDR LOAD segment
+            write_bytes(out_elf, phdr[prog_idx].p_offset, seg)
+
+    return out_elf</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> The 32-byte SCE Common Header, 72-byte Extended SELF Header, 32-byte AppInfo, 32-byte SectionInfo, <code>ControlInfo</code> chaining, 64-byte <code>MetadataInfo</code>, 32-byte <code>MetadataHeader</code>, 48-byte <code>MetadataSectionHeader</code>, and CellOS ELF64-PPC64/ELF32-SPU structures are fully verified across retail PS3 firmware and SDK binaries.</li>
+            <li><strong>Firmware-Revision &amp; Crypto-Gated Fields:</strong> Key selection depends on <code>key_revision</code> + <code>self_type</code> mapped to firmware-era root keys (ERK/RIV) and ECDSA curve parameters; capability flags inside <code>opt_header_size</code> vary by SDK version and privilege level.</li>
+        </ul>
+        <aside class="callout-warn" aria-label="Cryptographic key caveat">
+            <p><strong>Cryptographic Key Caveat:</strong> Retail SCE ERK/RIV keys, ECDSA private signing keys, and NPDRM master keys are proprietary and intentionally omitted from this specification. An external key resolver or valid user-supplied console license (<code>.rif</code> / <code>.rap</code>) is required to decrypt retail payloads; structural header parsing remains possible without keys.</p>
+        </aside>
+    </section>
+</body>
+</html>

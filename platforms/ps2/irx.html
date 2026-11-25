@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>IOP Relocatable Module (.irx) — PlayStation 2 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps2" target="_top">PlayStation 2</a><span>/</span><span>.irx IOP Relocatable Module</span>
+    </nav>
+
+    <h1>.irx IOP Relocatable Module</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">PLAYSTATION 2 · I/O PROCESSOR MODULE <span class="scope-badge">Platform-Inherited</span></p>
+        <p>An <code>.irx</code> (IOP Relocatable eXecutable) file is a little-endian ELF32 MIPS R3000A module executed by the PlayStation 2 I/O Processor (IOP). Unlike statically linked EE executables, <code>.irx</code> binaries use Sony's processor-specific ELF type <code>0xFF80</code> (<code>ET_IOP_EXEC</code>), carry a mandatory <code>SHT_IOPMOD</code> (<code>0x70000080</code>) metadata descriptor, retain <code>SHT_REL</code> relocation tables so <code>MODLOAD</code> can place the module anywhere in 2 MiB IOP RAM, and perform dynamic library linking via <code>0x41E00000</code> import/export tables.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.IRX</code> (e.g. <code>SIO2MAN.IRX</code>, <code>PADMAN.IRX</code>, <code>MCMAN.IRX</code>, <code>LIBSD.IRX</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>7F 45 4C 46</code> (<code>\x7FELF</code>) with <code>e_type = 0xFF80</code> (or <code>0xFF81</code>) and <code>SHT_IOPMOD = 0x70000080</code></dd>
+            <dt>Endianness</dt>
+            <dd>Little-Endian (<code>EI_DATA = 1</code>, <code>ELFDATA2LSB</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 2 IOP (MIPS R3000A, IOP Kernel <code>MODLOAD</code> / <code>LOADCORE</code>, EE <code>SifLoadModule</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Relocatable IOP driver or resident library (<code>application/x-elf</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Relocations &amp; Import/Export Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; SifLoadModule Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Relocator Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section class="section" id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Every <code>.irx</code> begins with a standard 52-byte <code>Elf32_Ehdr</code> configured for little-endian MIPS (<code>EI_CLASS = 1</code>, <code>EI_DATA = 1</code>, <code>e_machine = 8</code>), distinguished from EE executables and standard relocatable <code>.o</code> objects by:</p>
+        <ul>
+            <li><strong><code>e_type = 0xFF80</code> (<code>ET_IOP_EXEC</code> / <code>ET_SCE_IOPRELEXEC</code>):</strong> Processor-specific relocatable IOP module linked at base address <code>0x00000000</code> (variant <code>0xFF81</code> <code>ET_SCE_IOPRELEXEC2</code> also exists in later toolchains).</li>
+            <li><strong><code>e_flags</code>:</strong> Targets MIPS I / R3000A (no <code>EF_MIPS_MACH_5900</code> and no <code>EABI64</code>; typically <code>0x00000000</code> or <code>0x00000001</code> <code>EF_MIPS_NOREORDER</code>).</li>
+            <li><strong><code>.iopmod</code> Section / Segment:</strong> Identified by <code>SHT_IOPMOD = 0x70000080</code> (and usually a matching <code>PT_IOPMOD = 0x70000080</code> program header) storing the <code>irx_info</code> descriptor.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>IRX ELF32 Header Key Differences (52 / 0x34 bytes at Offset 0x00)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>e_ident</code></td>
+                        <td><code>7F 45 4C 46 01 01 01 00 ...</code> (<code>ELFCLASS32</code>, <code>ELFDATA2LSB</code>, <code>EV_CURRENT</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_type</code></td>
+                        <td><code>0xFF80</code> (<code>ET_IOP_EXEC</code>) or <code>0xFF81</code> (<code>ET_IOP_EXEC2</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x12</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_machine</code></td>
+                        <td><code>8</code> (<code>EM_MIPS</code>, R3000A).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_entry</code></td>
+                        <td>Module-relative entry offset (or <code>0</code>; authoritative entry lives in <code>irx_info.entry</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x24</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_flags</code></td>
+                        <td>MIPS I / R3000A flags (typically <code>0x00000000</code> or <code>0x00000001</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>irx_info (SHT_IOPMOD = 0x70000080 / PT_IOPMOD = 0x70000080, 0x1A + N bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>moduleinfo</code></td>
+                        <td>Module-relative offset to <code>iopmod_id_t</code> structure, or <code>0xFFFFFFFF</code> if omitted.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>entry</code></td>
+                        <td>Module-relative offset of <code>_start(int argc, char *argv[])</code>, or <code>0xFFFFFFFF</code> if none.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>gp_value</code></td>
+                        <td>Module-relative initial <code>$gp</code> pointer offset (relocated by adding loaded module base).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>text_size</code></td>
+                        <td>Total byte size of <code>.text</code> (code) region.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>data_size</code></td>
+                        <td>Total byte size of <code>.data</code> (initialized data) region.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>bss_size</code></td>
+                        <td>Total byte size of <code>.bss</code> (zero-initialized data) region.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>module_version</code></td>
+                        <td>BCD version (major in upper byte, minor in lower byte, e.g. <code>0x0102</code> = v1.2).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1A</code></td>
+                        <td>Variable</td>
+                        <td><code>char[]</code></td>
+                        <td><code>module_name</code></td>
+                        <td>NUL-terminated ASCII module name string (e.g. <code>"cdvdman\0"</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>iopmod_id_t (Referenced by irx_info.moduleinfo when != 0xFFFFFFFF, 8 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>name</code></td>
+                        <td>Pointer/offset to NUL-terminated ASCII module name (relocated via <code>R_MIPS_32</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>version</code></td>
+                        <td>Module version in BCD (high byte major, low byte minor).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x06</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>flags</code></td>
+                        <td>Reserved / alignment padding (typically <code>0x0000</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Elf32_Rel — Relocation Entry (SHT_REL = 9, 8 bytes per entry)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>r_offset</code></td>
+                        <td>Byte offset (relative to module/section base) of the 32-bit word to patch.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>r_info</code></td>
+                        <td>Packed symbol index (<code>r_info &gt;&gt; 8</code>) and relocation type (<code>r_info &amp; 0xFF</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>IOP Library Export &amp; Import Table Headers (Embedded in .text, 20 / 0x14 bytes + entries)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>magic</code></td>
+                        <td>Constant <code>0x41E00000</code> marker identifying an IOP export or import header.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>next</code></td>
+                        <td>Runtime linked-list pointer used by <code>LOADCORE</code> (<code>0x00000000</code> on disk).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>version</code></td>
+                        <td>Library BCD version (exported version or minimum required import version).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0A</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>flags</code></td>
+                        <td>Library flags (typically <code>0</code> on disk; runtime flags set by <code>LOADCORE</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>8</td>
+                        <td><code>char[8]</code></td>
+                        <td><code>name</code></td>
+                        <td>8-byte ASCII library identifier, NUL-padded (e.g. <code>"sysmem\0\0"</code>, <code>"loadcore"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>Variable</td>
+                        <td><code>u32le[] / Stub[]</code></td>
+                        <td><code>entries</code></td>
+                        <td>For exports: array of <code>u32le</code> function pointers terminated by <code>0x00000000</code>. For imports: array of 8-byte MIPS call stubs terminated by 8 zero bytes.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="flags">
+        <h2>3. Flags, Relocations &amp; Import/Export Formulas</h2>
+
+        <h3>MIPS Relocation Types (<code>R_MIPS_*</code>)</h3>
+        <p>Let <code>B</code> be the allocated IOP RAM base address of the module, and <code>*P</code> be the existing 32-bit little-endian word at <code>B + r_offset</code>:</p>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>IRX Relocation Codes (r_type = r_info &amp; 0xFF)</caption>
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Relocation Formula</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0</code></td>
+                        <td><code>R_MIPS_NONE</code></td>
+                        <td>No operation.</td>
+                    </tr>
+                    <tr>
+                        <td><code>2</code></td>
+                        <td><code>R_MIPS_32</code></td>
+                        <td>Direct 32-bit pointer: <code>*P = *P + B</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>4</code></td>
+                        <td><code>R_MIPS_26</code></td>
+                        <td>26-bit jump target (<code>j</code> / <code>jal</code>): <code>A = (*P &amp; 0x03FFFFFF) &lt;&lt; 2</code>; <code>*P = (*P &amp; 0xFC000000) | (((A + B) &gt;&gt; 2) &amp; 0x03FFFFFF)</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>5</code></td>
+                        <td><code>R_MIPS_HI16</code></td>
+                        <td>Upper 16 bits (<code>lui</code>): queued until paired with the following <code>R_MIPS_LO16</code>; uses signed <code>LO16</code> carry adjustment.</td>
+                    </tr>
+                    <tr>
+                        <td><code>6</code></td>
+                        <td><code>R_MIPS_LO16</code></td>
+                        <td>Lower 16 bits (<code>addiu</code> / <code>lw</code> / <code>sw</code>): combined with all queued <code>R_MIPS_HI16</code> entries: <code>V = ((s16)(*HI16 &amp; 0xFFFF) &lt;&lt; 16) + (s16)(*LO16 &amp; 0xFFFF) + B</code>; write <code>((V + 0x8000) &gt;&gt; 16) &amp; 0xFFFF</code> to each <code>HI16</code> and <code>V &amp; 0xFFFF</code> to <code>LO16</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>IOP Import Stub &amp; Export Table Mechanics</h3>
+        <ul>
+            <li><strong>Import Call Stubs (8 bytes per imported function):</strong> On disk, each stub at <code>0x14 + k * 8</code> contains:
+                <ul>
+                    <li>Word <code>+0x00</code>: <code>0x03E00008</code> (<code>jr $ra</code>)</li>
+                    <li>Word <code>+0x04</code>: <code>0x24000000 | func_index</code> (<code>addiu $zero, $zero, func_index</code>)</li>
+                </ul>
+                When <code>LOADCORE</code> resolves the target library's export table, it patches word <code>+0x00</code> to <code>0x08000000 | ((export_addr &gt;&gt; 2) &amp; 0x03FFFFFF)</code> (<code>j export_addr</code>) and word <code>+0x04</code> to <code>0x00000000</code> (<code>nop</code>).
+            </li>
+            <li><strong>Export Table Differentiation:</strong> Both export and import tables begin with <code>0x41E00000</code>. At runtime/analysis, import stubs are recognizable by the <code>0x03E00008</code> / <code>0x2400XXXX</code> pattern and sit in <code>.iop.import</code> sections (without <code>R_MIPS_32</code> relocations on entries), whereas export tables sit in <code>.iop.export</code> with <code>R_MIPS_32</code> relocations on every non-zero function pointer.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="edge-cases">
+        <h2>4. Edge Cases &amp; SifLoadModule Rules</h2>
+        <ul>
+            <li><strong>Mandatory Relocations &amp; Metadata:</strong> Stripping <code>SHT_REL</code> or <code>SHT_IOPMOD</code> renders an <code>.irx</code> unloadable on real hardware because every module is linked at base <code>0x00000000</code> and cannot execute without runtime relocation by <code>MODLOAD</code>.</li>
+            <li><strong>Multiple <code>R_MIPS_HI16</code> Before One <code>R_MIPS_LO16</code>:</strong> Optimizing MIPS compilers emit multiple <code>lui</code> instructions sharing one lower-half <code>addiu</code>/load/store. Relocators must maintain a FIFO/list of pending <code>R_MIPS_HI16</code> locations and resolve all of them when the matching <code>R_MIPS_LO16</code> is encountered.</li>
+            <li><strong><code>r_offset</code> Base Semantics:</strong> In linked <code>ET_IOP_EXEC</code> (<code>0xFF80</code>) files, <code>r_offset</code> is typically module-relative (relative to base <code>0</code> of the image, even though the <code>SHT_REL</code> section's <code>sh_info</code> names the target section). Unlinked <code>ET_REL</code> (<code>1</code>) objects before <code>iop-ld</code> use section-relative offsets plus symbol table lookups.</li>
+            <li><strong>Generalized <code>SifLoadModule</code> / <code>MODLOAD</code> Lifecycle:</strong>
+                <ol>
+                    <li>EE calls <code>SifLoadModule</code> (via SIF RPC <code>LOADFILE</code> server on IOP).</li>
+                    <li><code>MODLOAD</code> validates <code>e_type == 0xFF80</code> and reads <code>irx_info</code> from <code>PT_IOPMOD</code> / <code>SHT_IOPMOD</code>.</li>
+                    <li>IOP kernel allocates <code>text_size + data_size + bss_size</code> bytes in IOP RAM at base <code>B</code>, copies <code>PT_LOAD</code> data, and zeroes the <code>bss_size</code> tail.</li>
+                    <li><code>MODLOAD</code> applies all <code>SHT_REL</code> relocations using base <code>B</code> and flushes IOP instruction/data caches.</li>
+                    <li><code>LOADCORE</code> resolves <code>.iop.import</code> stubs against registered export tables and registers any exported tables.</li>
+                    <li><code>MODLOAD</code> invokes <code>B + irx_info.entry</code> with <code>$gp = B + irx_info.gp_value</code>; return value <code>0</code> (<code>MODULE_RESIDENT_END</code>) keeps the driver resident, while <code>1</code> (<code>MODULE_NO_RESIDENT_END</code>) unloads its memory after initialization.</li>
+                </ol>
+            </li>
+        </ul>
+    </section>
+
+    <section class="section" id="pseudocode">
+        <h2>5. Step-by-Step Relocator Pseudocode</h2>
+        <pre><code>function load_and_relocate_irx(buf, iop_base):
+    if len(buf) &lt; 0x34 or buf[0..4] != b"\x7FELF":
+        error("Invalid ELF magic")
+    if buf[4] != 1 or buf[5] != 1:
+        error("Expected ELFCLASS32 little-endian")
+
+    e_type    = u16le(buf, 0x10)
+    e_machine = u16le(buf, 0x12)
+    e_phoff   = u32le(buf, 0x1C)
+    e_shoff   = u32le(buf, 0x20)
+    e_phent   = u16le(buf, 0x2A)
+    e_phnum   = u16le(buf, 0x2C)
+    e_shent   = u16le(buf, 0x2E)
+    e_shnum   = u16le(buf, 0x30)
+
+    if e_type not in (0xFF80, 0xFF81) or e_machine != 8:
+        error("Not a PS2 IOP IRX executable")
+    if e_shoff == 0 or e_shnum == 0:
+        error("Stripped IRX missing section headers")
+
+    # 1. Locate SHT_IOPMOD (0x70000080) and SHT_REL (9) sections
+    iopmod = null
+    rel_sections = []
+    for i in 0 .. e_shnum - 1:
+        sh = e_shoff + i * e_shent
+        sh_type   = u32le(buf, sh + 0x04)
+        sh_offset = u32le(buf, sh + 0x10)
+        sh_size   = u32le(buf, sh + 0x14)
+        if sh_type == 0x70000080:
+            iopmod = {
+                "moduleinfo": u32le(buf, sh_offset + 0x00),
+                "entry":      u32le(buf, sh_offset + 0x04),
+                "gp_value":   u32le(buf, sh_offset + 0x08),
+                "text_size":  u32le(buf, sh_offset + 0x0C),
+                "data_size":  u32le(buf, sh_offset + 0x10),
+                "bss_size":   u32le(buf, sh_offset + 0x14),
+                "version":    u16le(buf, sh_offset + 0x18),
+                "name":       read_cstr(buf, sh_offset + 0x1A, sh_size - 0x1A)
+            }
+        elif sh_type == 9:  # SHT_REL
+            rel_sections.append((sh_offset, sh_size))
+
+    if iopmod is null:
+        error("Missing SHT_IOPMOD metadata")
+
+    # 2. Allocate and map PT_LOAD segments into IOP RAM image
+    total_mem = iopmod.text_size + iopmod.data_size + iopmod.bss_size
+    image = bytearray(total_mem)  # zero-initialized (covers .bss)
+    for i in 0 .. e_phnum - 1:
+        ph = e_phoff + i * e_phent
+        if u32le(buf, ph + 0x00) == 1:  # PT_LOAD
+            p_offset = u32le(buf, ph + 0x04)
+            p_vaddr  = u32le(buf, ph + 0x08)
+            p_filesz = u32le(buf, ph + 0x10)
+            image[p_vaddr .. p_vaddr + p_filesz] = buf[p_offset .. p_offset + p_filesz]
+
+    # 3. Apply SHT_REL relocations relative to iop_base
+    pending_hi16 = []
+    for (rel_off, rel_sz) in rel_sections:
+        for pos in range(rel_off, rel_off + rel_sz, 8):
+            r_offset = u32le(buf, pos + 0x00)
+            r_info   = u32le(buf, pos + 0x04)
+            r_type   = r_info &amp; 0xFF
+            word     = u32le(image, r_offset)
+
+            if r_type == 0:    # R_MIPS_NONE
+                continue
+            elif r_type == 2:  # R_MIPS_32
+                write_u32le(image, r_offset, (word + iop_base) &amp; 0xFFFFFFFF)
+            elif r_type == 4:  # R_MIPS_26
+                target = (((word &amp; 0x03FFFFFF) &lt;&lt; 2) + iop_base) &gt;&gt; 2
+                write_u32le(image, r_offset, (word &amp; 0xFC000000) | (target &amp; 0x03FFFFFF))
+            elif r_type == 5:  # R_MIPS_HI16
+                pending_hi16.append(r_offset)
+            elif r_type == 6:  # R_MIPS_LO16
+                lo_addend = sign_extend_16(word &amp; 0xFFFF)
+                for hi_off in pending_hi16:
+                    hi_word = u32le(image, hi_off)
+                    hi_val  = sign_extend_16(hi_word &amp; 0xFFFF) &lt;&lt; 16
+                    full    = hi_val + lo_addend + iop_base
+                    new_hi  = ((full + 0x8000) &gt;&gt; 16) &amp; 0xFFFF
+                    write_u32le(image, hi_off, (hi_word &amp; 0xFFFF0000) | new_hi)
+                pending_hi16.clear()
+                new_lo = (lo_addend + iop_base) &amp; 0xFFFF
+                write_u32le(image, r_offset, (word &amp; 0xFFFF0000) | new_lo)
+
+    return { "iopmod": iopmod, "image": image, "entry": iop_base + iopmod.entry }</code></pre>
+    </section>
+
+    <section class="section" id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>
+            <span class="badge confidence-confirmed">Confirmed Spec</span>
+            <span class="badge confidence-revision">SDK-Revision-Dependent</span>
+        </p>
+        <ul>
+            <li><strong>Confirmed Spec:</strong> ELF32 MIPS layout, <code>e_type = 0xFF80</code>, <code>SHT_IOPMOD = 0x70000080</code>, <code>irx_info</code> offsets, <code>R_MIPS_32/26/HI16/LO16</code> arithmetic, and <code>0x41E00000</code> import/export stub structures are confirmed across official PS2 BIOS modules and open-source PS2SDK tools.</li>
+            <li><strong>SDK-Revision-Dependent:</strong> <code>ET_SCE_IOPRELEXEC2</code> (<code>0xFF81</code>) and <code>moduleinfo = 0xFFFFFFFF</code> occur in specific linker/SDK generations; some modules include additional <code>.iopmod</code> alignment padding or multiple <code>PT_LOAD</code> segments.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Relocation Note:</strong> Do not conflate standard MIPS <code>ET_REL</code> (<code>e_type = 1</code>) object files with linked <code>ET_IOP_EXEC</code> (<code>0xFF80</code>) <code>.irx</code> files; unlinked objects require symbol table (<code>SHT_SYMTAB</code>) resolution, whereas linked <code>.irx</code> relocations resolve directly against the module load base.</p>
+        </aside>
+    </section>
+</body>
+</html>

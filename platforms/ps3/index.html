@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PlayStation 3 (CellOS / PS3) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><span>PlayStation 3</span>
+    </nav>
+
+    <h1>PlayStation 3 (CellOS / PS3)</h1>
+
+    <section class="format-summary" aria-label="Platform summary">
+        <p class="eyebrow">Platform Overview · 7th Generation Console (2006)</p>
+        <p>The Sony PlayStation 3 runs <strong>CellOS (LV2)</strong> beneath the <strong>LV1 hypervisor</strong> on the heterogeneous <strong>Cell Broadband Engine</strong>. Retail discs, digital PSN packages, executables, system metadata, and trophy archives share a unified Sony Computer Entertainment (SCE) container ecosystem that is predominantly <strong>big-endian</strong>, with notable little-endian exceptions such as <code>PARAM.SFO</code>.</p>
+        <dl>
+            <dt>Primary CPU</dt>
+            <dd>Cell Broadband Engine: 1× 64-bit PowerPC Processing Unit (PPU, big-endian PPC64, 2 hardware threads, VMX/AltiVec) + 6× active Synergistic Processing Units (SPUs, 32-bit big-endian, 256 KiB Local Store each)</dd>
+            <dt>Graphics &amp; Memory</dt>
+            <dd>RSX Reality Synthesizer GPU · 256 MiB XDR main RAM + 256 MiB GDDR3 VRAM</dd>
+            <dt>Operating System</dt>
+            <dd>CellOS (LV2 kernel, ELF64 <code>EI_OSABI = 0x66</code>) over LV1 hypervisor; XMB system shell</dd>
+            <dt>Distribution Media</dt>
+            <dd>Blu-ray Disc (<code>BD-ROM</code>, ISO-9660 / UDF 2.50) and PlayStation Network digital packages (<code>.pkg</code>)</dd>
+            <dt>Primary Endianness</dt>
+            <dd>Big-endian (<code>BE</code>) for Cell PPU/SPU code, SCE/SELF, PKG, SFB, and TRP; Little-endian (<code>LE</code>) for <code>PARAM.SFO</code> / <code>PARAM.SFX</code></dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#architecture">Hardware &amp; CellOS Runtime</a></li>
+            <li><a href="#disc-layout">PS3_GAME Disc Directory Layout</a></li>
+            <li><a href="#psn-model">XMB &amp; PSN Package Model</a></li>
+            <li><a href="#format-index">Platform Format Specifications</a></li>
+        </ul>
+    </nav>
+
+    <section id="architecture">
+        <h2>Hardware &amp; CellOS Runtime Architecture</h2>
+        <p>PlayStation 3 software targets an asymmetric multi-core architecture managed by a privilege-separated hypervisor and kernel stack:</p>
+        <ul>
+            <li><strong>PPU (PowerPC Processing Unit):</strong> Executes 64-bit big-endian PowerPC binaries (<code>ELFCLASS64</code>, <code>ELFDATA2MSB</code>, <code>EM_PPC64 = 21</code>) compiled with the CellOS LV2 ABI. Although the PPU registers are 64-bit, userland pointers and memory mappings commonly occupy the lower 32-bit address space (4 GiB virtual window) for compactness. Function pointers resolve through <strong>OPD (Official Procedure Descriptors)</strong> pairing a code entry address with a TOC (<code>r2</code>) base pointer.</li>
+            <li><strong>SPUs (Synergistic Processing Units):</strong> Out of 8 physical SPEs, 1 is disabled for manufacturing yield, 1 is reserved by the LV1 hypervisor for security/isolation, and 6 are exposed to userland applications. Each SPU executes standalone 32-bit big-endian SPU ELF modules (<code>EM_SPU = 23</code>) directly out of its private 256 KiB Local Store, transferring main memory via DMA.</li>
+            <li><strong>Dynamic Linking (PRX / SPRX):</strong> Shared libraries are packaged as signed PRX relocatable modules (<code>.sprx</code>) whose exported and imported symbols are identified by 32-bit <strong>NID (Name ID)</strong> hashes rather than ASCII symbol strings at runtime.</li>
+            <li><strong>Security &amp; Encryption Boundary:</strong> Executables (<code>EBOOT.BIN</code>, <code>.self</code>, <code>.sprx</code>) and digital packages (<code>.pkg</code>) are wrapped in SCE cryptographic envelopes verified by LV1/LV0/SPU isolated security loaders before ELF segments are mapped into CellOS memory.</li>
+        </ul>
+    </section>
+
+    <section id="disc-layout">
+        <h2>PS3_GAME Disc Directory Layout</h2>
+        <p>Standard retail Blu-ray game discs expose an ISO-9660 / UDF filesystem structured around a fixed top-level hierarchy:</p>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Standard PS3 Blu-ray Disc Layout</caption>
+                <thead>
+                    <tr>
+                        <th>Path</th>
+                        <th>Required</th>
+                        <th>Format</th>
+                        <th>Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>/PS3_DISC.SFB</code></td>
+                        <td>Yes (Disc)</td>
+                        <td>SFB (<code>.SFB</code>)</td>
+                        <td>Disc descriptor declaring <code>HYBRID_FLAG</code>, <code>DISC_ID</code>, and disc revision.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PS3_GAME/PARAM.SFO</code></td>
+                        <td>Yes</td>
+                        <td>PSF (<code>\x00PSF</code>)</td>
+                        <td>Little-endian title metadata: <code>TITLE_ID</code>, <code>CATEGORY</code>, resolution, audio, parental level, and system flags.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PS3_GAME/ICON0.PNG</code></td>
+                        <td>Yes</td>
+                        <td>PNG (320×176)</td>
+                        <td>Primary XMB disc/game icon displayed in the system menu.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PS3_GAME/PIC0.PNG</code>, <code>PIC1.PNG</code></td>
+                        <td>Optional</td>
+                        <td>PNG (up to 1920×1080)</td>
+                        <td>XMB foreground overlay (<code>PIC0.PNG</code>) and full-screen background wallpaper (<code>PIC1.PNG</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PS3_GAME/ICON1.PAM</code>, <code>SND0.AT3</code></td>
+                        <td>Optional</td>
+                        <td>PAM / ATRAC3</td>
+                        <td>Animated XMB icon video stream and background preview audio track.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PS3_GAME/LICDIR/LIC.DAT</code></td>
+                        <td>Yes (Disc)</td>
+                        <td><code>PS3LICDA</code></td>
+                        <td>Encrypted/signed disc license descriptor verifying licensed disc title IDs.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PS3_GAME/TROPDIR/NPWR#####_00/TROPHY.TRP</code></td>
+                        <td>Optional</td>
+                        <td>TRP (<code>0xDCA24D00</code>)</td>
+                        <td>Trophy archive containing <code>TROPCONF.SFM</code>, localized <code>TROP*.SFM</code> XMLs, and PNG icons.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PS3_GAME/USRDIR/EBOOT.BIN</code></td>
+                        <td>Yes</td>
+                        <td>SELF (<code>SCE\0</code>)</td>
+                        <td>Primary signed PPU executable launched by CellOS; sibling <code>*.sprx</code> and title data reside under <code>USRDIR/</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PS3_UPDATE/PS3UPDAT.PUP</code></td>
+                        <td>Optional</td>
+                        <td>PUP (<code>SCEUF</code>)</td>
+                        <td>Bundled minimum-required system firmware update package.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="psn-model">
+        <h2>XMB &amp; PSN Package Model</h2>
+        <p>Digital titles, patches, DLC, and HDD-installed data bypass the optical disc wrapper and instead install from signed <code>.pkg</code> archives into internal storage under <code>/dev_hdd0/game/&lt;TITLE_ID&gt;/</code>:</p>
+        <ul>
+            <li><strong>Root equivalence:</strong> An installed PSN package mirrors the contents of <code>PS3_GAME/</code> directly under <code>/dev_hdd0/game/&lt;TITLE_ID&gt;/</code> (containing <code>PARAM.SFO</code>, <code>ICON0.PNG</code>, <code>TROPDIR/</code>, and <code>USRDIR/EBOOT.BIN</code>), without <code>PS3_DISC.SFB</code> or <code>PS3_UPDATE/</code>.</li>
+            <li><strong>NPDRM Licensing:</strong> Paid PSN executables and <code>.edat</code>/<code>.sdat</code> assets carry an NPDRM control block in their SELF/EDAT header tied to a 36-character <code>CONTENT_ID</code>. At runtime, CellOS resolves the decryption <code>klicensee</code> via a console-bound <code>.rif</code> license (derived from a 16-byte <code>.rap</code> key and <code>act.dat</code>) or a free-license key.</li>
+            <li><strong>Patch &amp; Game Data Overlays:</strong> Disc updates install into <code>/dev_hdd0/game/&lt;TITLE_ID&gt;/</code> with <code>CATEGORY = GD</code> (Game Data) and an updated <code>EBOOT.BIN</code> plus <code>PARAM.SFO</code> / <code>PARAM.SFX</code> specifying <code>APP_VER</code>.</li>
+        </ul>
+    </section>
+
+    <section id="format-index">
+        <h2>Platform Format Specifications</h2>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PlayStation 3 Platform Format Index</caption>
+                <thead>
+                    <tr>
+                        <th>Specification</th>
+                        <th>Canonical Files</th>
+                        <th>Magic</th>
+                        <th>Endian</th>
+                        <th>Summary</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><a href="../../index.html#ps3-self-eboot" target="_top">EBOOT.BIN / SELF / SPRX</a></td>
+                        <td><code>EBOOT.BIN</code>, <code>*.self</code>, <code>*.sprx</code></td>
+                        <td><code>0x53434500</code> (<code>SCE\0</code>)</td>
+                        <td>BE</td>
+                        <td>Signed/encrypted executable and PRX wrapper around ELF64-PPC64 and embedded SPU ELF32 modules.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#ps3-param-sfo" target="_top">PARAM.SFO / PARAM.SFX &amp; PS3_DISC.SFB</a></td>
+                        <td><code>PARAM.SFO</code>, <code>PARAM.SFX</code>, <code>PS3_DISC.SFB</code></td>
+                        <td><code>0x00505346</code> (<code>\x00PSF</code>) / <code>0x2E534642</code> (<code>.SFB</code>)</td>
+                        <td>LE (SFO) / BE (SFB)</td>
+                        <td>System parameter key-value table (hybrid little-endian) and big-endian Blu-ray disc descriptor.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#ps3-pkg" target="_top">.pkg &amp; .rap PSN Package</a></td>
+                        <td><code>*.pkg</code>, <code>*.rap</code></td>
+                        <td><code>0x7F504B47</code> (<code>\x7FPKG</code>) / raw 16B</td>
+                        <td>BE</td>
+                        <td>PSN installation container with TLV metadata, AES-128-CTR/SHA-1 encrypted item tree, and 16-byte RAP license key.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#ps3-trp" target="_top">TROPHY.TRP Archive</a></td>
+                        <td><code>TROPHY.TRP</code></td>
+                        <td><code>0xDCA24D00</code></td>
+                        <td>BE</td>
+                        <td>Trophy asset container (v1–v3) holding <code>TROPCONF.SFM</code>, localized <code>TROP*.SFM</code>, PNG icons, and SHA-1 integrity.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+</body>
+</html>

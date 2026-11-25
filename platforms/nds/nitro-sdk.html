@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nintendo DS Nitro SDK Containers (NARC/CARC, SDAT) &amp; BIOS LZ10/LZ11 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#nds" target="_top">Nintendo DS</a><span>/</span><span>Nitro SDK Containers &amp; BIOS LZ</span>
+    </nav>
+
+    <h1>Nitro SDK Containers (NARC / CARC, SDAT) &amp; BIOS LZ10 / LZ11</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Platform Binary Specification · SDK Archives, Sound Data &amp; Compression</p>
+        <p>The Nintendo Nitro SDK provides standard archive, audio, and BIOS decompression primitives inherited by DS titles: <strong>NARC</strong>/<strong>CARC</strong> resource archives (sharing NitroFS-style FAT/FNT blocks), <strong>SDAT</strong> sound data archives, and <strong>LZ10</strong>/<strong>LZ11</strong> compression streams decoded via NDS BIOS <code>SWI 0x11</code>/<code>0x12</code> or Nitro SDK <code>MI_UncompressLZ*</code>.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.narc</code>, <code>*.carc</code> (compressed NARC), <code>*.sdat</code> (commonly <code>sound_data.sdat</code>), raw <code>.lz</code>/embedded streams</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>NARC</code> (<code>4E 41 52 43</code>) with chunks <code>BTAF</code>/<code>BTNF</code>/<code>GMIF</code>; <code>SDAT</code> (<code>53 44 41 54</code>); LZ headers <code>0x10</code> / <code>0x11</code></dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (<code>u16le</code>, <code>u32le</code>); note reversed on-disk FourCCs inside NARC chunks</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo DS (NTR) &amp; DSi (TWL) Nitro SDK middleware &amp; ARM BIOS decompression</dd>
+            <dt>Role/MIME</dt>
+            <dd>SDK asset archives, synthesized/streamed audio containers, and compressed binary payloads</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">Identification &amp; Scope</a></li>
+            <li><a href="#layout">Binary Layout Tables</a></li>
+            <li><a href="#flags">Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">Parser Pseudocode</a></li>
+            <li><a href="#provenance">Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Nitro SDK binary containers share a 16-byte (or extended 64-byte in <code>SDAT</code>) standard header starting with a 4-byte ASCII signature, a <code>0xFFFE</code> little-endian byte-order mark (bytes <code>FE FF</code> on disk), a version word (<code>0x0100</code> for v1.0), total file size, header size, and block/chunk count:</p>
+        <ul>
+            <li><strong><code>NARC</code> (<code>4E 41 52 43</code>):</strong> Uncompressed Nitro Archive containing three sequential blocks whose on-disk chunk IDs are stored in little-endian FourCC order: <code>BTAF</code> (<code>FATB</code>), <code>BTNF</code> (<code>FNTB</code>), and <code>GMIF</code> (<code>FIMG</code>).</li>
+            <li><strong><code>CARC</code>:</strong> Compressed NARC — a standard <code>NARC</code> payload wrapped in a BIOS LZ10 (<code>0x10</code>) or LZ11 (<code>0x11</code>) header (not a distinct container magic).</li>
+            <li><strong><code>SDAT</code> (<code>53 44 41 54</code>):</strong> Nitro Sound Data archive header (64 bytes) indexing <code>SYMB</code>, <code>INFO</code>, <code>FAT </code>, and <code>FILE</code> blocks (literal ASCII block IDs, not reversed).</li>
+            <li><strong>BIOS LZ10 / LZ11:</strong> Prefixed by a 4-byte compression descriptor whose byte <code>0</code> is <code>0x10</code> (LZ10) or <code>0x11</code> (LZ11) and bytes <code>1..3</code> encode the 24-bit little-endian decompressed size.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>NARC Standard File Header (16 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>4</td><td>char[4]</td><td>magic</td><td><code>"NARC"</code> (<code>4E 41 52 43</code>).</td></tr>
+                    <tr><td>0x04</td><td>2</td><td>u16le</td><td>bom</td><td>Byte Order Mark: <code>0xFFFE</code> (<code>FE FF</code> on disk).</td></tr>
+                    <tr><td>0x06</td><td>2</td><td>u16le</td><td>version</td><td>Format version (typically <code>0x0100</code> = v1.0).</td></tr>
+                    <tr><td>0x08</td><td>4</td><td>u32le</td><td>file_size</td><td>Total NARC file size in bytes.</td></tr>
+                    <tr><td>0x0C</td><td>2</td><td>u16le</td><td>header_size</td><td>Header size in bytes (<code>0x0010</code>).</td></tr>
+                    <tr><td>0x0E</td><td>2</td><td>u16le</td><td>chunk_count</td><td>Number of following chunks (<code>0x0003</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>NARC Chunks: FATB (BTAF), FNTB (BTNF), and FIMG (GMIF)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>4</td><td>char[4]</td><td>fatb_id</td><td><code>"BTAF"</code> (<code>42 54 41 46</code>, Nitro SDK <code>FATB</code>).</td></tr>
+                    <tr><td>0x04</td><td>4</td><td>u32le</td><td>fatb_size</td><td>Chunk size including 8-byte header (<code>12 + 8 * file_count</code>).</td></tr>
+                    <tr><td>0x08</td><td>2</td><td>u16le</td><td>file_count</td><td>Number of archived files.</td></tr>
+                    <tr><td>0x0A</td><td>2</td><td>u16le</td><td>reserved</td><td>Reserved (<code>0x0000</code>).</td></tr>
+                    <tr><td>0x0C</td><td>8 * N</td><td>NARC_FAT[]</td><td>entries</td><td>Array of <code>{ start_offset: u32le, end_offset: u32le }</code> relative to <code>GMIF + 8</code>.</td></tr>
+                    <tr><td>+0x00</td><td>4</td><td>char[4]</td><td>fntb_id</td><td><code>"BTNF"</code> (<code>42 54 4E 46</code>, Nitro SDK <code>FNTB</code>).</td></tr>
+                    <tr><td>+0x04</td><td>4</td><td>u32le</td><td>fntb_size</td><td>Chunk size including 8-byte header.</td></tr>
+                    <tr><td>+0x08</td><td>var</td><td>u8[]</td><td>fnt_data</td><td>NitroFS-format directory table &amp; name sub-tables (see <a href="../../index.html#nds-nds-rom" target="_top">NitroFS FNT</a>).</td></tr>
+                    <tr><td>+0x00</td><td>4</td><td>char[4]</td><td>fimg_id</td><td><code>"GMIF"</code> (<code>47 4D 49 46</code>, Nitro SDK <code>FIMG</code>).</td></tr>
+                    <tr><td>+0x04</td><td>4</td><td>u32le</td><td>fimg_size</td><td>Chunk size including 8-byte header.</td></tr>
+                    <tr><td>+0x08</td><td>var</td><td>u8[]</td><td>file_data</td><td>Concatenated file payloads (typically 4-byte aligned).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>SDAT Header (64 bytes, 0x00–0x3F)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>4</td><td>char[4]</td><td>magic</td><td><code>"SDAT"</code> (<code>53 44 41 54</code>).</td></tr>
+                    <tr><td>0x04</td><td>2</td><td>u16le</td><td>bom</td><td>Byte Order Mark: <code>0xFFFE</code> (<code>FE FF</code> on disk).</td></tr>
+                    <tr><td>0x06</td><td>2</td><td>u16le</td><td>version</td><td>Format version (<code>0x0100</code> = v1.0).</td></tr>
+                    <tr><td>0x08</td><td>4</td><td>u32le</td><td>file_size</td><td>Total SDAT file size in bytes.</td></tr>
+                    <tr><td>0x0C</td><td>2</td><td>u16le</td><td>header_size</td><td>Header size in bytes (<code>0x0040</code>).</td></tr>
+                    <tr><td>0x0E</td><td>2</td><td>u16le</td><td>block_count</td><td>Number of blocks (<code>3</code> if <code>SYMB</code> stripped, <code>4</code> with <code>SYMB</code>).</td></tr>
+                    <tr><td>0x10</td><td>4</td><td>u32le</td><td>symb_offset</td><td>File offset of <code>"SYMB"</code> block (<code>0</code> if absent).</td></tr>
+                    <tr><td>0x14</td><td>4</td><td>u32le</td><td>symb_size</td><td>Byte size of <code>"SYMB"</code> block (<code>0</code> if absent).</td></tr>
+                    <tr><td>0x18</td><td>4</td><td>u32le</td><td>info_offset</td><td>File offset of <code>"INFO"</code> block.</td></tr>
+                    <tr><td>0x1C</td><td>4</td><td>u32le</td><td>info_size</td><td>Byte size of <code>"INFO"</code> block.</td></tr>
+                    <tr><td>0x20</td><td>4</td><td>u32le</td><td>fat_offset</td><td>File offset of <code>"FAT "</code> block (sound asset offset/size table).</td></tr>
+                    <tr><td>0x24</td><td>4</td><td>u32le</td><td>fat_size</td><td>Byte size of <code>"FAT "</code> block.</td></tr>
+                    <tr><td>0x28</td><td>4</td><td>u32le</td><td>file_offset</td><td>File offset of <code>"FILE"</code> block containing inner <code>SSEQ</code>/<code>SSAR</code>/<code>SBNK</code>/<code>SWAR</code>/<code>STRM</code> payloads.</td></tr>
+                    <tr><td>0x2C</td><td>4</td><td>u32le</td><td>file_block_size</td><td>Byte size of <code>"FILE"</code> block.</td></tr>
+                    <tr><td>0x30</td><td>16</td><td>u8[16]</td><td>reserved</td><td>Reserved, zero-padded to <code>0x40</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>SDAT FAT Block Header &amp; Entry (at fat_offset)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>4</td><td>char[4]</td><td>block_id</td><td><code>"FAT "</code> (<code>46 41 54 20</code>).</td></tr>
+                    <tr><td>0x04</td><td>4</td><td>u32le</td><td>block_size</td><td>Total size of <code>FAT </code> block.</td></tr>
+                    <tr><td>0x08</td><td>4</td><td>u32le</td><td>record_count</td><td>Number of 16-byte sound file entries.</td></tr>
+                    <tr><td>0x0C + i*16</td><td>4</td><td>u32le</td><td>file_offset</td><td>Absolute offset from start of SDAT file to inner sound resource.</td></tr>
+                    <tr><td>0x10 + i*16</td><td>4</td><td>u32le</td><td>file_size</td><td>Byte length of the inner sound resource.</td></tr>
+                    <tr><td>0x14 + i*16</td><td>8</td><td>u32le[2]</td><td>reserved</td><td>Reserved (zero).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>BIOS LZ10 / LZ11 Compression Header (4 bytes, or 8 bytes for LZ11 &gt;= 16 MiB)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>1</td><td>u8</td><td>comp_type</td><td><code>0x10</code> = LZ10 (BIOS <code>SWI 0x11</code>/<code>0x12</code>); <code>0x11</code> = LZ11 (extended length).</td></tr>
+                    <tr><td>0x01</td><td>3</td><td>u24le</td><td>decompressed_size</td><td>Uncompressed byte length (little-endian 24-bit integer).</td></tr>
+                    <tr><td>0x04 (LZ11 only)</td><td>4</td><td>u32le</td><td>ext_decomp_size</td><td>Present only in LZ11 when 24-bit size at <code>0x01..0x03</code> equals <code>0</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>NARC Payload Offset Formula</h3>
+        <p>Unlike NitroFS ROM FAT entries (which are absolute ROM offsets), NARC <code>FATB</code> entries are relative to the start of the <code>FIMG</code> (<code>GMIF</code>) data payload:</p>
+        <pre><code>abs_start = fimg_chunk_offset + 8 + fatb_entry.start_offset
+abs_end   = fimg_chunk_offset + 8 + fatb_entry.end_offset
+file_data = narc_bytes[abs_start : abs_end]</code></pre>
+
+        <h3>LZ10 (<code>0x10</code>) Bitstream Decoding</h3>
+        <p>Reads a flag byte (MSB-first, bit 7 down to bit 0). Bit <code>0</code> copies 1 literal byte; bit <code>1</code> reads 2 bytes <code>(b0, b1)</code>:</p>
+        <ul>
+            <li><code>length = (b0 &gt;&gt; 4) + 3</code> (<code>3..18</code> bytes)</li>
+            <li><code>disp = (((b0 &amp; 0x0F) &lt;&lt; 8) | b1) + 1</code> (<code>1..4096</code> bytes backwards in output)</li>
+        </ul>
+
+        <h3>LZ11 (<code>0x11</code>) Bitstream Decoding</h3>
+        <p>Reads a flag byte (MSB-first). Bit <code>0</code> copies 1 literal byte; bit <code>1</code> inspects the high nibble <code>n = (b0 &gt;&gt; 4)</code> of the first token byte:</p>
+        <ul>
+            <li><strong><code>n == 0</code> (3-byte token <code>b0, b1, b2</code>):</strong>
+                <code>length = (((b0 &amp; 0x0F) &lt;&lt; 4) | (b1 &gt;&gt; 4)) + 0x11</code> (<code>17..272</code>),
+                <code>disp = (((b1 &amp; 0x0F) &lt;&lt; 8) | b2) + 1</code></li>
+            <li><strong><code>n == 1</code> (4-byte token <code>b0, b1, b2, b3</code>):</strong>
+                <code>length = (((b0 &amp; 0x0F) &lt;&lt; 12) | (b1 &lt;&lt; 4) | (b2 &gt;&gt; 4)) + 0x111</code> (<code>273..65808</code>),
+                <code>disp = (((b2 &amp; 0x0F) &lt;&lt; 8) | b3) + 1</code></li>
+            <li><strong><code>n &gt;= 2</code> (2-byte token <code>b0, b1</code>):</strong>
+                <code>length = n + 1</code> (<code>3..16</code>),
+                <code>disp = (((b0 &amp; 0x0F) &lt;&lt; 8) | b1) + 1</code></li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Nameless NARCs:</strong> Many <code>.narc</code> archives omit filenames to save space. In those files, the <code>BTNF</code> chunk is 16 bytes long (<code>chunk_size == 0x10</code>) with a single dummy root directory entry (<code>subtable_offset = 4</code> or <code>8</code>, <code>first_file_id = 0</code>, <code>dir_count = 1</code>) and no filename entries; parsers must fall back to numeric indexing (<code>0..file_count-1</code>) when <code>BTNF</code> contains no names.</li>
+            <li><strong>CARC Detection:</strong> <code>.carc</code> files start with <code>0x10</code> or <code>0x11</code> rather than <code>"NARC"</code>. Decompress the stream first using LZ10/LZ11, then verify the <code>"NARC"</code> signature at offset <code>0x00</code> of the output.</li>
+            <li><strong>SDAT Stripped <code>SYMB</code>:</strong> When <code>block_count == 3</code>, <code>symb_offset</code> and <code>symb_size</code> are both <code>0</code>; inner sound assets remain fully addressable by numeric index via <code>INFO</code> and <code>FAT </code>.</li>
+            <li><strong>Overlapping LZ Backreferences:</strong> Both LZ10 and LZ11 allow <code>disp &lt; length</code> (run-length repetition); decoders MUST copy byte-by-byte from <code>out[dst - disp]</code> rather than bulk-copying slices.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Parser Pseudocode</h2>
+        <pre><code>function decompress_lz10_lz11(src):
+    comp_type = src[0]
+    assert comp_type in (0x10, 0x11)
+    decomp_size = src[1] | (src[2] &lt;&lt; 8) | (src[3] &lt;&lt; 16)
+    pos = 4
+    if comp_type == 0x11 and decomp_size == 0:
+        decomp_size = read_u32le(src, 4)
+        pos = 8
+
+    out = allocate_bytes(decomp_size)
+    dst = 0
+    while dst &lt; decomp_size:
+        flags = src[pos]; pos += 1
+        for bit in range(8):
+            if dst &gt;= decomp_size:
+                break
+            if (flags &amp; (0x80 &gt;&gt; bit)) == 0:
+                out[dst] = src[pos]
+                dst += 1; pos += 1
+            else:
+                b0 = src[pos]; pos += 1
+                if comp_type == 0x10:
+                    b1 = src[pos]; pos += 1
+                    length = (b0 &gt;&gt; 4) + 3
+                    disp   = (((b0 &amp; 0x0F) &lt;&lt; 8) | b1) + 1
+                else:
+                    n = b0 &gt;&gt; 4
+                    if n == 0:
+                        b1 = src[pos]; b2 = src[pos + 1]; pos += 2
+                        length = (((b0 &amp; 0x0F) &lt;&lt; 4) | (b1 &gt;&gt; 4)) + 0x11
+                        disp   = (((b1 &amp; 0x0F) &lt;&lt; 8) | b2) + 1
+                    elif n == 1:
+                        b1 = src[pos]; b2 = src[pos + 1]; b3 = src[pos + 2]; pos += 3
+                        length = (((b0 &amp; 0x0F) &lt;&lt; 12) | (b1 &lt;&lt; 4) | (b2 &gt;&gt; 4)) + 0x111
+                        disp   = (((b2 &amp; 0x0F) &lt;&lt; 8) | b3) + 1
+                    else:
+                        b1 = src[pos]; pos += 1
+                        length = n + 1
+                        disp   = (((b0 &amp; 0x0F) &lt;&lt; 8) | b1) + 1
+                for _ in range(length):
+                    assert dst - disp &gt;= 0 and dst &lt; decomp_size
+                    out[dst] = out[dst - disp]
+                    dst += 1
+    return out
+
+function parse_narc(buf):
+    if buf[0] in (0x10, 0x11):
+        buf = decompress_lz10_lz11(buf)
+
+    assert ascii(buf[0x00:0x04]) == "NARC"
+    assert read_u16le(buf, 0x04) == 0xFFFE
+    hdr_size = read_u16le(buf, 0x0C)
+    assert hdr_size == 0x0010
+
+    fatb_off  = hdr_size
+    assert ascii(buf[fatb_off : fatb_off + 4]) == "BTAF"
+    fatb_size = read_u32le(buf, fatb_off + 4)
+    n_files   = read_u16le(buf, fatb_off + 8)
+
+    fntb_off  = fatb_off + fatb_size
+    assert ascii(buf[fntb_off : fntb_off + 4]) == "BTNF"
+    fntb_size = read_u32le(buf, fntb_off + 4)
+
+    fimg_off  = fntb_off + fntb_size
+    assert ascii(buf[fimg_off : fimg_off + 4]) == "GMIF"
+    data_base = fimg_off + 8
+
+    entries = []
+    for i in range(n_files):
+        s = read_u32le(buf, fatb_off + 12 + i * 8)
+        e = read_u32le(buf, fatb_off + 16 + i * 8)
+        entries.append(buf[data_base + s : data_base + e])
+    return entries
+
+function parse_sdat_header(buf):
+    assert ascii(buf[0x00:0x04]) == "SDAT"
+    assert read_u16le(buf, 0x04) == 0xFFFE
+    fat_off = read_u32le(buf, 0x20)
+    assert ascii(buf[fat_off : fat_off + 4]) == "FAT "
+    count = read_u32le(buf, fat_off + 8)
+    assets = []
+    for i in range(count):
+        rec = fat_off + 12 + i * 16
+        f_off  = read_u32le(buf, rec + 0)
+        f_size = read_u32le(buf, rec + 4)
+        assets.append(buf[f_off : f_off + f_size])
+    return assets</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>The NARC header and chunk structures (<code>BTAF</code>/<code>BTNF</code>/<code>GMIF</code>), SDAT 64-byte header and <code>FAT </code> table, and BIOS LZ10/LZ11 compression encodings are <strong>confirmed</strong> across Nitro SDK container formats and ARM BIOS decompression behavior.</p>
+        <aside class="callout-warn">
+            <strong>Caveats:</strong> NARC chunk signatures appear reversed on disk (<code>BTAF</code>, <code>BTNF</code>, <code>GMIF</code>) because Nitro SDK writes little-endian 32-bit FourCC constants, whereas SDAT writes literal forward ASCII block IDs (<code>SYMB</code>, <code>INFO</code>, <code>FAT </code>, <code>FILE</code>). Inner SDAT sub-formats (<code>SSEQ</code>, <code>SSAR</code>, <code>SBNK</code>, <code>SWAR</code>, <code>STRM</code>) and Nitro G2D/G3D graphics containers (<code>NCGR</code>, <code>NCLR</code>, <code>NSBMD</code>, etc.) follow the same 16-byte Nitro header convention but are outside the scope of this container header specification.
+        </aside>
+    </section>
+</body>
+</html>

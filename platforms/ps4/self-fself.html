@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Orbis SELF / FSELF &amp; Embedded ELF64-x86_64 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps4" target="_top">PlayStation 4</a><span>/</span><span>Orbis SELF / FSELF &amp; ELF64</span>
+    </nav>
+
+    <h1>Orbis SELF / FSELF &amp; Embedded ELF64-x86_64</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">PLAYSTATION 4 · EXECUTABLE &amp; SHARED MODULE CONTAINER</p>
+        <p>Signed, optionally encrypted, and optionally zlib-compressed wrapper around 64-bit x86-64 Orbis ELF executables (<code>eboot.bin</code>) and relocatable dynamic modules (<code>.prx</code> / <code>.sprx</code>). FSELF ("Fake SELF") images keep the same binary envelope with encryption/signing bypassed for development or decrypted inspection.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>eboot.bin</code>, <code>*.prx</code>, <code>*.sprx</code>, <code>*.self</code>, <code>*.elf</code> (unwrapped)</dd>
+            <dt>Magic Bytes</dt>
+            <dd>SELF: <code>4F 15 3D 1D</code> (<code>u32le 0x1D3D154F</code>); Embedded ELF64: <code>7F 45 4C 46</code> (<code>\x7FELF</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian throughout (SELF header, segment entries, ELF64 headers, <code>PT_SCE_*</code> structures)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 4 (Orbis OS, FreeBSD-derived kernel, AMD64 x86-64)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Primary application executable and dynamic library container (<code>application/x-orbis-self</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section class="section" id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Orbis OS does not execute raw ELF files directly from retail media or packages. Instead, every main executable (<code>eboot.bin</code>) and dynamic module (<code>.prx</code> / <code>.sprx</code>) is packaged inside an <strong>Orbis SELF</strong> envelope identified by the 32-bit little-endian magic <code>0x1D3D154F</code> (byte sequence <code>4F 15 3D 1D</code>). This magic is distinct from PlayStation 3's big-endian <code>SCE\0</code> (<code>0x53434500</code>) SELF header.</p>
+        <ul>
+            <li><strong>Pure Little-Endian Hierarchy:</strong> Unlike PS4 <code>.pkg</code> (CNT) or <code>trophy00.trp</code> archives whose outer headers are big-endian, Orbis SELF headers, segment entry descriptors, embedded ELF64-x86_64 headers, program headers, and <code>PT_SCE_DYNLIBDATA</code> tables are uniformly <strong>little-endian</strong>.</li>
+            <li><strong>SELF vs. FSELF:</strong> Retail SELFs carry encrypted AES-128-CTR/CBC segment payloads, SHA-256 block digests, and RSA-2048 signatures validated by the SAMU co-processor. Development or unwrapped <strong>FSELF</strong> images use the exact same <code>0x1D3D154F</code> header and 32-byte segment table, but leave loadable segments unencrypted (and optionally zlib-deflated) with unverified/dummy signature metadata.</li>
+            <li><strong>Unwrapped ELF64-x86_64:</strong> Embedded directly after the SELF segment table is a standard 64-byte ELF64 header (<code>7F 45 4C 46</code>, <code>EI_CLASS=2</code>, <code>EI_DATA=1</code>, <code>e_machine=0x003E</code>) followed by 56-byte <code>Elf64_Phdr</code> entries including Orbis-specific <code>PT_SCE_*</code> segments.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Orbis SELF Common Header (32 bytes / 0x20 at offset 0x00)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>Magic</td>
+                        <td>Orbis SELF magic value <code>0x1D3D154F</code> (bytes <code>4F 15 3D 1D</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x04</td>
+                        <td>1</td>
+                        <td>u8</td>
+                        <td>Version</td>
+                        <td>Header format version (observed <code>0x00</code> in Orbis SELF).</td>
+                    </tr>
+                    <tr>
+                        <td>0x05</td>
+                        <td>1</td>
+                        <td>u8</td>
+                        <td>Mode</td>
+                        <td>Format mode byte (observed <code>0x01</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x06</td>
+                        <td>1</td>
+                        <td>u8</td>
+                        <td>Endian</td>
+                        <td>Byte order indicator (<code>0x01</code> = little-endian).</td>
+                    </tr>
+                    <tr>
+                        <td>0x07</td>
+                        <td>1</td>
+                        <td>u8</td>
+                        <td>Attributes</td>
+                        <td>SELF header attribute byte (typically <code>0x12</code> on Orbis).</td>
+                    </tr>
+                    <tr>
+                        <td>0x08</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>KeyType</td>
+                        <td>Key/category selector (e.g., <code>0x0101</code> for retail/app categories; <code>0x0000</code> in minimal FSELFs).</td>
+                    </tr>
+                    <tr>
+                        <td>0x0C</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>HeaderSize</td>
+                        <td>Total size in bytes of the combined SELF header, segment table, embedded ELF header/Phdrs, extended info, NPDRM block, and metadata header.</td>
+                    </tr>
+                    <tr>
+                        <td>0x0E</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>MetaSize</td>
+                        <td>Size in bytes of the cryptographic metadata block (segment keys, HMACs, RSA signature).</td>
+                    </tr>
+                    <tr>
+                        <td>0x10</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>FileSize</td>
+                        <td>Declared SELF image size in bytes (excluding optional trailing version/footer blocks on some builds).</td>
+                    </tr>
+                    <tr>
+                        <td>0x18</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>NumEntries</td>
+                        <td>Number of 32-byte segment entries starting immediately at offset <code>0x20</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>0x1A</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>Flags</td>
+                        <td>Global SELF flags (commonly <code>0x0002</code> in Orbis SELFs).</td>
+                    </tr>
+                    <tr>
+                        <td>0x1C</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>Reserved</td>
+                        <td>Zero padding (<code>0x00000000</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>SELF Segment Entry Record (32 bytes / 0x20 each, NumEntries records starting at 0x20)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>Flags</td>
+                        <td>Packed bitfield: encryption/compression/signing flags, block size exponent (bits 12..15), and linked ELF <code>Phdr</code> index (bits 20..31).</td>
+                    </tr>
+                    <tr>
+                        <td>0x08</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>Offset</td>
+                        <td>Absolute byte offset from the start of the SELF file to this entry's payload or block-digest table.</td>
+                    </tr>
+                    <tr>
+                        <td>0x10</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>CompressedSize</td>
+                        <td>Stored byte size in the SELF file (on disk).</td>
+                    </tr>
+                    <tr>
+                        <td>0x18</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>UncompressedSize</td>
+                        <td>Logical/decompressed byte size (matches <code>Elf64_Phdr.p_filesz</code> for data segments).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Orbis Extended Info &amp; NPDRM Control Block (Placed after Embedded Elf64_Phdr Array)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset (Rel)</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>+0x00</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>AuthId</td>
+                        <td>Authority ID identifying privilege level (e.g., standard retail application vs. system daemon).</td>
+                    </tr>
+                    <tr>
+                        <td>+0x08</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>ProgramType</td>
+                        <td>Executable category / paid type selector.</td>
+                    </tr>
+                    <tr>
+                        <td>+0x10</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>AppVersion</td>
+                        <td>64-bit packed application version number.</td>
+                    </tr>
+                    <tr>
+                        <td>+0x18</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>FwVersion</td>
+                        <td>Minimum Orbis OS firmware version required.</td>
+                    </tr>
+                    <tr>
+                        <td>+0x20</td>
+                        <td>32</td>
+                        <td>u8[32]</td>
+                        <td>Digest</td>
+                        <td>SHA-256 digest covering the unwrapped ELF64 image.</td>
+                    </tr>
+                    <tr>
+                        <td>+0x40</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>NpdrmType</td>
+                        <td>Optional NPDRM control block type (48-byte NPDRM record when present; zeroed in FSELF/non-NPDRM).</td>
+                    </tr>
+                    <tr>
+                        <td>+0x44</td>
+                        <td>12</td>
+                        <td>u8[12]</td>
+                        <td>NpdrmReserved</td>
+                        <td>NPDRM metadata flags/padding preceding content ID / digest bytes.</td>
+                    </tr>
+                    <tr>
+                        <td>+0x50</td>
+                        <td>32</td>
+                        <td>u8[32]</td>
+                        <td>NpdrmContentDigest</td>
+                        <td>Content ID / digest bytes within the 0x30-byte NPDRM control block.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Embedded ELF64-x86_64 Header (64 bytes / 0x40, located at 0x20 + NumEntries &times; 0x20)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>16</td>
+                        <td>u8[16]</td>
+                        <td>e_ident</td>
+                        <td><code>7F 45 4C 46</code> (<code>\x7FELF</code>), <code>EI_CLASS=2</code> (64-bit), <code>EI_DATA=1</code> (LE), <code>EI_VERSION=1</code>, <code>EI_OSABI=0x09</code> (FreeBSD) or <code>0x00</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>0x10</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>e_type</td>
+                        <td>ELF object type (<code>0x0002</code> <code>ET_EXEC</code>, <code>0x0003</code> <code>ET_DYN</code>, or <code>ET_SCE_*</code> <code>0xFE00..0xFE18</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x12</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>e_machine</td>
+                        <td>Target architecture: <code>0x003E</code> (<code>EM_X86_64</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x14</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>e_version</td>
+                        <td>ELF version (<code>1</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x18</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>e_entry</td>
+                        <td>Virtual entry point address (<code>0</code> for PRX/SPRX shared modules without standalone entry).</td>
+                    </tr>
+                    <tr>
+                        <td>0x20</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>e_phoff</td>
+                        <td>Offset from ELF start to Program Header table (normally <code>0x40</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x28</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>e_shoff</td>
+                        <td>Offset to Section Header table (commonly <code>0</code> when stripped in retail SELFs).</td>
+                    </tr>
+                    <tr>
+                        <td>0x30</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>e_flags</td>
+                        <td>Processor-specific flags (<code>0</code> on x86-64).</td>
+                    </tr>
+                    <tr>
+                        <td>0x34</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>e_ehsize</td>
+                        <td>Size of ELF64 header (<code>64</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x36</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>e_phentsize</td>
+                        <td>Size of each Program Header (<code>56</code> bytes).</td>
+                    </tr>
+                    <tr>
+                        <td>0x38</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>e_phnum</td>
+                        <td>Number of <code>Elf64_Phdr</code> entries.</td>
+                    </tr>
+                    <tr>
+                        <td>0x3A</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>e_shentsize</td>
+                        <td>Size of each Section Header (<code>64</code> bytes when present, or <code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x3C</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>e_shnum</td>
+                        <td>Number of Section Headers (often <code>0</code> in stripped SELFs).</td>
+                    </tr>
+                    <tr>
+                        <td>0x3E</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>e_shstrndx</td>
+                        <td>Section header string table index (<code>0</code> when stripped).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Embedded ELF64 Program Header (Elf64_Phdr, 56 bytes / 0x38 each)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>p_type</td>
+                        <td>Segment type (<code>PT_LOAD</code>, <code>PT_DYNAMIC</code>, <code>PT_INTERP</code>, or <code>PT_SCE_*</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x04</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>p_flags</td>
+                        <td>Permission flags (<code>PF_X=1</code>, <code>PF_W=2</code>, <code>PF_R=4</code>, plus SCE-specific upper bits).</td>
+                    </tr>
+                    <tr>
+                        <td>0x08</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>p_offset</td>
+                        <td>Segment offset in the reconstructed ELF file.</td>
+                    </tr>
+                    <tr>
+                        <td>0x10</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>p_vaddr</td>
+                        <td>Target virtual address (typically <code>0</code> for non-mapped <code>PT_SCE_DYNLIBDATA</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x18</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>p_paddr</td>
+                        <td>Physical/load address (mirrors <code>p_vaddr</code> or <code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x20</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>p_filesz</td>
+                        <td>Byte size of segment data stored in the ELF / SELF segment entry.</td>
+                    </tr>
+                    <tr>
+                        <td>0x28</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>p_memsz</td>
+                        <td>Byte size allocated in virtual memory (<code>p_memsz - p_filesz</code> is zero-filled BSS).</td>
+                    </tr>
+                    <tr>
+                        <td>0x30</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>p_align</td>
+                        <td>Segment alignment (typically <code>0x4000</code> = 16 KiB page alignment on Orbis, or <code>0x1000</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Orbis SELF Segment Entry Flags (u64le Flags at entry +0x00)</caption>
+                <thead>
+                    <tr>
+                        <th>Mask / Bits</th>
+                        <th>Shift</th>
+                        <th>Name</th>
+                        <th>Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000000000000001</code></td>
+                        <td>Bit 0</td>
+                        <td>SF_ORDERED</td>
+                        <td>Segment data is sequentially ordered.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0000000000000002</code></td>
+                        <td>Bit 1</td>
+                        <td>SF_ENCRYPTED</td>
+                        <td>Segment payload is encrypted (AES-128-CTR/CBC under metadata segment key). Cleared in FSELF.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0000000000000004</code></td>
+                        <td>Bit 2</td>
+                        <td>SF_SIGNED</td>
+                        <td>Segment is covered by cryptographic signature/digest verification.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0000000000000008</code></td>
+                        <td>Bit 3</td>
+                        <td>SF_DEFLATED</td>
+                        <td>Segment payload is zlib-compressed (RFC 1950/1951); inflate when <code>CompressedSize &lt; UncompressedSize</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0000000000000800</code></td>
+                        <td>Bit 11</td>
+                        <td>SF_BLOCKS</td>
+                        <td>Segment is segmented into fixed-size blocks and carries an associated ELF <code>Phdr</code> index.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x000000000000F000</code></td>
+                        <td>Bits 12..15</td>
+                        <td>SF_BLOCK_SIZE</td>
+                        <td>Block size exponent <code>exp = (Flags &gt;&gt; 12) &amp; 0xF</code>; block size = <code>1 &lt;&lt; (12 + exp)</code> bytes (e.g., <code>exp=2</code> &rarr; <code>0x4000</code> = 16 KiB).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0000000000010000</code></td>
+                        <td>Bit 16</td>
+                        <td>SF_DIGESTS</td>
+                        <td>Entry holds SHA-256 block digest table rather than raw ELF segment payload.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0000000000020000</code></td>
+                        <td>Bit 17</td>
+                        <td>SF_EXTENTS</td>
+                        <td>Entry holds block extent descriptor records for its linked segment.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00000000FFF00000</code></td>
+                        <td>Bits 20..31</td>
+                        <td>SF_SEGMENT_ID</td>
+                        <td><code>SegmentId = (Flags &gt;&gt; 20) &amp; 0xFFF</code>; indexes <code>Elf64_Phdr[SegmentId]</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Orbis ELF64 Object Types (e_type) &amp; Program Header Types (p_type)</caption>
+                <thead>
+                    <tr>
+                        <th>Value</th>
+                        <th>Category</th>
+                        <th>Symbol</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0xFE00</code></td>
+                        <td><code>e_type</code></td>
+                        <td>ET_SCE_EXEC</td>
+                        <td>Orbis non-ASLR executable image.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xFE04</code></td>
+                        <td><code>e_type</code></td>
+                        <td>ET_SCE_RELAEXEC</td>
+                        <td>Orbis relocatable executable image.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xFE10</code></td>
+                        <td><code>e_type</code></td>
+                        <td>ET_SCE_DYNEXEC</td>
+                        <td>Orbis ASLR/position-independent main executable (<code>eboot.bin</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xFE18</code></td>
+                        <td><code>e_type</code></td>
+                        <td>ET_SCE_DYNAMIC</td>
+                        <td>Orbis dynamic shared library module (<code>.prx</code> / <code>.sprx</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x60000000</code></td>
+                        <td><code>p_type</code></td>
+                        <td>PT_SCE_RELA</td>
+                        <td>SCE relocation segment.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x61000000</code></td>
+                        <td><code>p_type</code></td>
+                        <td>PT_SCE_DYNLIBDATA</td>
+                        <td>Dynamic linking data (NID strings, symbol/hash tables, <code>JMPREL</code>/<code>RELA</code>, module/library imports and exports).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x61000001</code></td>
+                        <td><code>p_type</code></td>
+                        <td>PT_SCE_PROCPARAM</td>
+                        <td>Process parameter block (<code>sceProcessParam</code>: SDK version, libc heap/ASLR configuration).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x61000002</code></td>
+                        <td><code>p_type</code></td>
+                        <td>PT_SCE_MODULE_PARAM</td>
+                        <td>PRX/SPRX module parameter block (<code>sceModuleParam</code>: SDK version and module metadata).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x61000010</code></td>
+                        <td><code>p_type</code></td>
+                        <td>PT_SCE_RELRO</td>
+                        <td>Read-only-after-relocation segment (mapped RW during dynamic linking, then protected RO).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x6FFFFF00</code></td>
+                        <td><code>p_type</code></td>
+                        <td>PT_SCE_COMMENT</td>
+                        <td>SCE toolchain/linker build comment data.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x6FFFFF01</code></td>
+                        <td><code>p_type</code></td>
+                        <td>PT_SCE_VERSION</td>
+                        <td>SCE module/SDK version descriptor list.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <p><strong>NID Dynamic Linking Formula:</strong> Orbis dynamic linking identifies imported and exported functions/variables using <strong>NIDs</strong> (Name Identifiers) rather than raw symbol strings. An export or import name in <code>PT_SCE_DYNLIBDATA</code>'s string table (<code>DT_SCE_STRTAB</code>) is formatted as:</p>
+        <pre><code>nid_string = Base64Url_NoPad(first_8_bytes(SHA1(symbol_name || platform_nid_salt)))
+full_entry = nid_string + "#" + LibraryId_Base64 + "#" + ModuleId_Base64</code></pre>
+        <p>Note that the 8-byte digest is interpreted as a 64-bit integer and encoded into 11 URL-safe Base64 characters (alphabet <code>A-Z a-z 0-9 + -</code> or <code>- _</code> depending on encoder variant, without <code>=</code> padding).</p>
+    </section>
+
+    <section class="section" id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Segment Entry Deduplication (Data vs. Digest/Extent Entries):</strong> A SELF's <code>NumEntries</code> table often contains <em>more</em> entries than <code>e_phnum</code>. For each encrypted/blocked ELF <code>Phdr</code>, there is typically a digest/block-metadata entry (<code>SF_DIGESTS</code> or <code>SF_EXTENTS</code> set) alongside the actual data entry (<code>SF_BLOCKS</code> set and <code>SF_DIGESTS == 0</code> and <code>SF_EXTENTS == 0</code>). Both share the same <code>SegmentId = (Flags &gt;&gt; 20) &amp; 0xFFF</code>. Parsers reconstructing the unwrapped ELF must select only the payload entry (ignoring digest/extent entries) and write its decompressed/decrypted bytes to <code>Elf64_Phdr[SegmentId].p_offset</code>.</li>
+            <li><strong>Non-Mapped <code>PT_SCE_DYNLIBDATA</code>:</strong> Unlike standard SysV ELF where <code>.dynamic</code>, <code>.dynsym</code>, and <code>.dynstr</code> reside inside a <code>PT_LOAD</code> segment, Orbis places dynamic linking metadata inside <code>PT_SCE_DYNLIBDATA</code> (<code>0x61000000</code>), which commonly has <code>p_vaddr == 0</code> and <code>p_memsz == 0</code> while carrying a non-zero <code>p_offset</code> and <code>p_filesz</code>. The kernel/runtime dynamic linker (<code>ld-elf</code> / <code>libkernel</code>) reads this segment via file/descriptor rather than mapping it into the application's executable address space.</li>
+            <li><strong>FSELF vs. Retail Encrypted SELF:</strong> If <code>SF_ENCRYPTED</code> (bit 1) is set, the raw bytes at <code>entry.Offset</code> are AES-128-CTR/CBC ciphertext and cannot be parsed or inflated without SAMU hardware decryption or externally decrypted keys. If <code>SF_ENCRYPTED == 0</code> (FSELF or decrypted SELF), check <code>SF_DEFLATED</code> (bit 3): if set, inflate with zlib from <code>entry.Offset</code> (<code>CompressedSize</code>) to <code>UncompressedSize</code> bytes; otherwise copy <code>UncompressedSize</code> bytes directly.</li>
+            <li><strong>Generalized Orbis ELF64 Loader Mapping:</strong> After unwrapping segments, a compliant loader iterates over <code>Elf64_Phdr</code> entries:
+                <ol>
+                    <li>Validate <code>e_machine == 0x003E</code>, <code>e_phentsize == 56</code>, and bounds against file size.</li>
+                    <li>For every <code>PT_LOAD</code> segment, map <code>p_memsz</code> bytes at <code>base_addr + p_vaddr</code> (16 KiB page aligned on Orbis), copy <code>p_filesz</code> bytes from <code>p_offset</code>, and zero-fill <code>[p_filesz .. p_memsz)</code> (BSS).</li>
+                    <li>Resolve dynamic dependencies from <code>PT_DYNAMIC</code> (<code>DT_NEEDED</code> / <code>DT_SCE_*</code> tags pointing into <code>PT_SCE_DYNLIBDATA</code>) and apply <code>R_X86_64_*</code> relocations from <code>DT_SCE_RELA</code> / <code>DT_SCE_JMPREL</code>.</li>
+                    <li>Apply final memory protections (RX/RW/RO), including marking <code>PT_SCE_RELRO</code> read-only after relocations complete, then transfer control to <code>base_addr + e_entry</code> (for executables) or module entry.</li>
+                </ol>
+            </li>
+            <li><strong>Trailing Signature / Padding:</strong> Retail SELFs may contain extra signature or padding bytes after the last segment's <code>Offset + CompressedSize</code>; do not assume <code>FileSize</code> equals the actual disk file length without bounds-checking each entry independently.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="pseudocode">
+        <h2>5. Step-by-Step Pseudocode</h2>
+        <pre><code>function ParseAndUnwrapOrbisSelf(file_bytes):
+    if len(file_bytes) &lt; 0x20:
+        error("Truncated Orbis SELF header")
+
+    magic       = read_u32le(file_bytes, 0x00)
+    if magic != 0x1D3D154F:
+        error("Invalid Orbis SELF magic")
+
+    endian      = read_u8(file_bytes, 0x06)
+    header_size = read_u16le(file_bytes, 0x0C)
+    meta_size   = read_u16le(file_bytes, 0x0E)
+    file_size   = read_u64le(file_bytes, 0x10)
+    num_entries = read_u16le(file_bytes, 0x18)
+
+    table_end = 0x20 + num_entries * 0x20
+    if table_end + 0x40 &gt; len(file_bytes):
+        error("SELF segment table or ELF64 header out of bounds")
+
+    // 1. Parse SELF segment entries
+    self_entries = []
+    for i in 0 .. num_entries - 1:
+        off = 0x20 + i * 0x20
+        entry = {
+            flags:             read_u64le(file_bytes, off + 0x00),
+            offset:            read_u64le(file_bytes, off + 0x08),
+            compressed_size:   read_u64le(file_bytes, off + 0x10),
+            uncompressed_size: read_u64le(file_bytes, off + 0x18),
+        }
+        if entry.offset + entry.compressed_size &gt; len(file_bytes):
+            error("SELF entry payload out of bounds")
+        self_entries.append(entry)
+
+    // 2. Parse embedded ELF64-x86_64 header immediately after segment table
+    elf_off = table_end
+    if file_bytes[elf_off : elf_off + 4] != b"\x7FELF":
+        error("Missing embedded ELF64 header")
+    if read_u8(file_bytes, elf_off + 4) != 2 or read_u16le(file_bytes, elf_off + 0x12) != 0x003E:
+        error("Expected 64-bit x86-64 ELF")
+
+    e_phoff     = read_u64le(file_bytes, elf_off + 0x20)
+    e_phentsize = read_u16le(file_bytes, elf_off + 0x36)
+    e_phnum     = read_u16le(file_bytes, elf_off + 0x38)
+    if e_phentsize != 56:
+        error("Unexpected Elf64_Phdr size")
+
+    // 3. Read Elf64_Phdr table and determine reconstructed ELF output size
+    phdrs = []
+    max_elf_end = elf_off + e_phoff + e_phnum * 56
+    out_min_size = e_phoff + e_phnum * 56
+    for p in 0 .. e_phnum - 1:
+        po = elf_off + e_phoff + p * 56
+        if po + 56 &gt; len(file_bytes):
+            error("Program header out of bounds")
+        ph = {
+            p_type:   read_u32le(file_bytes, po + 0x00),
+            p_flags:  read_u32le(file_bytes, po + 0x04),
+            p_offset: read_u64le(file_bytes, po + 0x08),
+            p_vaddr:  read_u64le(file_bytes, po + 0x10),
+            p_filesz: read_u64le(file_bytes, po + 0x20),
+            p_memsz:  read_u64le(file_bytes, po + 0x28),
+        }
+        phdrs.append(ph)
+        out_min_size = max(out_min_size, ph.p_offset + ph.p_filesz)
+
+    // 4. Allocate output ELF buffer and copy ELF header + Phdrs
+    elf_out = bytearray(out_min_size)
+    hdr_len = e_phoff + e_phnum * 56
+    elf_out[0 : hdr_len] = file_bytes[elf_off : elf_off + hdr_len]
+    // Clear stripped section header fields if no section headers are carried
+    write_u64le(elf_out, 0x28, 0) // e_shoff
+    write_u16le(elf_out, 0x3C, 0) // e_shnum
+    write_u16le(elf_out, 0x3E, 0) // e_shstrndx
+
+    // 5. Unwrap data segments linked to Elf64_Phdr indices
+    for entry in self_entries:
+        is_blocks  = (entry.flags &amp; 0x800) != 0
+        is_meta    = (entry.flags &amp; 0x30000) != 0 // SF_DIGESTS | SF_EXTENTS
+        if not is_blocks or is_meta:
+            continue
+
+        seg_id = (entry.flags &gt;&gt; 20) &amp; 0xFFF
+        if seg_id &gt;= len(phdrs):
+            error("SELF SegmentId out of Elf64_Phdr range")
+
+        if (entry.flags &amp; 0x02) != 0:
+            error("Segment is retail-encrypted (SF_ENCRYPTED); SAMU key required")
+
+        raw = file_bytes[entry.offset : entry.offset + entry.compressed_size]
+        if (entry.flags &amp; 0x08) != 0:
+            payload = zlib_decompress(raw, expected_size=entry.uncompressed_size)
+        else:
+            payload = raw[0 : entry.uncompressed_size]
+
+        dst_off = phdrs[seg_id].p_offset
+        elf_out[dst_off : dst_off + len(payload)] = payload
+
+    return elf_out</code></pre>
+    </section>
+
+    <section class="section" id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <div class="badge-group">
+            <span class="badge confidence-confirmed">Confirmed: SELF Header, Segment Table &amp; ELF64</span>
+            <span class="badge confidence-revision">Revision-Dependent: Extended Info / NPDRM Fields</span>
+            <span class="badge confidence-unverified">Crypto-Gated: SAMU Segment Key Material</span>
+        </div>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> The 32-byte Orbis SELF common header (<code>0x1D3D154F</code>), 32-byte segment entry format, <code>SF_*</code> flag bits, embedded ELF64-x86_64 layout, and <code>PT_SCE_DYNLIBDATA</code> / <code>PT_SCE_PROCPARAM</code> / <code>PT_SCE_MODULE_PARAM</code> / <code>PT_SCE_RELRO</code> program header types are consistently verified across Orbis SDK toolchains and open-source PS4 loaders/builders.</li>
+            <li><strong>SDK-Revision-Dependent:</strong> Certain upper bits in <code>Flags</code>, <code>KeyType</code> values, and optional <code>NPDRM</code> / extended info fields vary across Orbis firmware/SDK generations (e.g., 1.xx vs. 4.xx+ vs. 9.xx+).</li>
+            <li><strong>Crypto-Gated Fields:</strong> Retail RSA-2048 signatures, segment AES-128-CTR keys, HMAC-SHA-256 digests, and SAMU key seeds inside <code>MetaSize</code> cannot be unwrapped offline without hardware-derived keys.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Security &amp; Key Exclusion Notice:</strong> No retail Sony private keys, SAMU key seeds, or proprietary NID salts are included in this specification. Tools parsing retail SELFs without hardware decryption must abort cleanly when <code>SF_ENCRYPTED</code> (bit 1) is set.</p>
+        </aside>
+    </section>
+</body>
+</html>

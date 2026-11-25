@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>STFS Package Container (CON / PIRS / LIVE) — Xbox 360 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#xbox360" target="_top">Xbox 360</a><span>/</span><span>STFS Package Container</span></nav>
+
+    <h1>STFS — Secure Transacted File System Container</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">Package &amp; Virtual Filesystem · Xbox 360 Storage</p>
+        <p>Cryptographically signed, SHA-1 hash-tree-verified container format used across Xbox 360 HDD, Memory Unit, and USB FATX storage for user profiles, savegames, downloadable content (DLC), title updates, gamerpics, and Xbox LIVE Arcade packages.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd>Extensionless hex/hash package names under <code>Content\&lt;ProfileID&gt;\&lt;TitleID&gt;\...</code> (e.g. <code>E000...</code>, <code>FFFE07D1</code>, <code>tu*</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>0x434F4E20</code> (<code>"CON "</code>) &middot; <code>0x50495253</code> (<code>"PIRS"</code>) &middot; <code>0x4C495645</code> (<code>"LIVE"</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Hybrid: Predominantly Big-Endian metadata &amp; hash chains (<code>u24be</code>), mixed with Little-Endian volume/entry block fields (<code>u16le</code>, <code>u24le</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Microsoft Xbox 360 Kernel / XAM (FATX storage devices)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Signed virtual block filesystem container (<code>application/x-xbox360-stfs</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification" class="section">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>STFS packages begin with a 4-byte ASCII signature identifying the signing authority:</p>
+        <ul>
+            <li><strong><code>CON </code> (<code>0x434F4E20</code>):</strong> Console-signed packages created by a retail or devkit Xbox 360 (savegames, user profiles, local themes/screenshots). Carries an embedded <code>0x1A8</code>-byte Console Public Key Certificate signed by Microsoft plus a per-package signature.</li>
+            <li><strong><code>PIRS</code> (<code>0x50495253</code>):</strong> Microsoft-signed packages distributed offline (on-disc installers, demos, system/dashboard packages).</li>
+            <li><strong><code>LIVE</code> (<code>0x4C495645</code>):</strong> Microsoft Xbox LIVE server-signed packages (DLC, XBLA titles, Title Updates, Marketplace content).</li>
+        </ul>
+        <p><strong>Mixed Endianness Warning:</strong> Although Xbox 360 is big-endian, STFS mixes byte orders inside its core structures. Content Metadata fields (<code>ContentSize</code>, <code>TitleID</code>, <code>FileSize</code>, <code>PathIndicator</code>) and Hash Table <code>NextBlockNumber</code> pointers (<code>u24be</code>) are <strong>Big-Endian</strong>, whereas the <strong>Volume Descriptor</strong> fields <code>FileTableBlockCount</code> (<code>u16le</code>) and <code>FileTableBlockNumber</code> (<code>u24le</code>), as well as each File Entry's <code>ValidDataBlocks</code>, <code>AllocatedBlocks</code>, and <code>StartingBlockNumber</code> (<code>u24le</code>), are <strong>Little-Endian</strong>.</p>
+    </section>
+
+    <section id="layout" class="section">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Signature &amp; Certificate Block (0x0000..0x022B, 0x22C bytes)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x0000</code></td><td>4</td><td><code>char[4]</code></td><td><code>Magic</code></td><td><code>"CON "</code>, <code>"PIRS"</code>, or <code>"LIVE"</code>.</td></tr>
+                    <tr><td><code>0x0004</code></td><td>2</td><td><code>u16be</code></td><td><code>CON.CertSize</code></td><td><code>CON </code> only: console public key certificate size (<code>0x01A8</code>).</td></tr>
+                    <tr><td><code>0x0006</code></td><td>5</td><td><code>u8[5]</code></td><td><code>CON.ConsoleID</code></td><td><code>CON </code> only: signing console hardware ID.</td></tr>
+                    <tr><td><code>0x000B</code></td><td>20</td><td><code>char[20]</code></td><td><code>CON.ConsolePartNumber</code></td><td><code>CON </code> only: console part string.</td></tr>
+                    <tr><td><code>0x001F</code></td><td>1</td><td><code>u8</code></td><td><code>CON.ConsoleType</code></td><td><code>CON </code> only: <code>0x01</code> = Devkit, <code>0x02</code> = Retail.</td></tr>
+                    <tr><td><code>0x0020</code></td><td>8</td><td><code>char[8]</code></td><td><code>CON.CertDate</code></td><td><code>CON </code> only: certificate generation date.</td></tr>
+                    <tr><td><code>0x0028</code></td><td>4</td><td><code>u32be</code></td><td><code>CON.PublicExponent</code></td><td><code>CON </code> only: RSA public exponent.</td></tr>
+                    <tr><td><code>0x002C</code></td><td>128</td><td><code>u8[128]</code></td><td><code>CON.PublicModulus</code></td><td><code>CON </code> only: RSA-1024 public key modulus.</td></tr>
+                    <tr><td><code>0x00AC</code></td><td>256</td><td><code>u8[256]</code></td><td><code>CON.CertSignature</code></td><td><code>CON </code> only: Microsoft RSA-2048 signature over console certificate.</td></tr>
+                    <tr><td><code>0x01AC</code></td><td>128</td><td><code>u8[128]</code></td><td><code>CON.Signature</code></td><td><code>CON </code> only: Console signature over header SHA-1.</td></tr>
+                    <tr><td><code>0x0004</code></td><td>256</td><td><code>u8[256]</code></td><td><code>LIVE_PIRS.Signature</code></td><td><code>LIVE</code>/<code>PIRS</code> only: Microsoft RSA-2048 package signature.</td></tr>
+                    <tr><td><code>0x0104</code></td><td>296</td><td><code>u8[296]</code></td><td><code>LIVE_PIRS.Padding</code></td><td><code>LIVE</code>/<code>PIRS</code> only: zero-filled padding up to <code>0x022C</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Content Metadata Header (0x022C..HeaderSize)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x022C</code></td><td>256</td><td><code>u8[256]</code></td><td><code>LicensingData</code></td><td>16 licensing records &times; 16 bytes (<code>u64be ID</code>, <code>u32be Bits</code>, <code>u32be Flags</code>).</td></tr>
+                    <tr><td><code>0x032C</code></td><td>20</td><td><code>u8[20]</code></td><td><code>HeaderHash</code></td><td>SHA-1 digest of bytes from <code>0x0344</code> to <code>HeaderSize</code>.</td></tr>
+                    <tr><td><code>0x0340</code></td><td>4</td><td><code>u32be</code></td><td><code>HeaderSize</code></td><td>Metadata end offset (commonly <code>0x971A</code> for v0/v1, up to <code>0xAD0E</code> for v2); data blocks start at <code>align_up(HeaderSize, 0x1000)</code> (typically <code>0xA000</code> or <code>0xB000</code>).</td></tr>
+                    <tr><td><code>0x0344</code></td><td>4</td><td><code>u32be</code></td><td><code>ContentType</code></td><td>Package category enum (Saved Game, Marketplace/DLC, Profile, Arcade, Title Update, etc.).</td></tr>
+                    <tr><td><code>0x0348</code></td><td>4</td><td><code>u32be</code></td><td><code>MetadataVersion</code></td><td>Header schema revision (<code>0</code>, <code>1</code>, or <code>2</code>).</td></tr>
+                    <tr><td><code>0x034C</code></td><td>8</td><td><code>u64be</code></td><td><code>ContentSize</code></td><td>Logical payload byte size.</td></tr>
+                    <tr><td><code>0x0354</code></td><td>4</td><td><code>u32be</code></td><td><code>MediaID</code></td><td>Associated disc/media ID.</td></tr>
+                    <tr><td><code>0x0358</code></td><td>8</td><td><code>u32be[2]</code></td><td><code>Version / BaseVersion</code></td><td>Title/update version and base version.</td></tr>
+                    <tr><td><code>0x0360</code></td><td>4</td><td><code>u32be</code></td><td><code>TitleID</code></td><td>32-bit Xbox 360 Title ID.</td></tr>
+                    <tr><td><code>0x0364</code></td><td>4</td><td><code>u8[4]</code></td><td><code>Platform / ExecType / Disc / DiscSet</code></td><td>Platform (<code>0x02</code> = X360), executable type, disc index, disc total.</td></tr>
+                    <tr><td><code>0x0368</code></td><td>4</td><td><code>u32be</code></td><td><code>SaveGameID</code></td><td>Save identifier.</td></tr>
+                    <tr><td><code>0x036C</code></td><td>5</td><td><code>u8[5]</code></td><td><code>ConsoleID</code></td><td>Originating Console ID.</td></tr>
+                    <tr><td><code>0x0371</code></td><td>8</td><td><code>u8[8]</code></td><td><code>ProfileID</code></td><td>Owner Xbox LIVE / offline Profile XUID.</td></tr>
+                    <tr><td><code>0x0379</code></td><td>36</td><td><code>STFS_VOLUME_DESC</code></td><td><code>VolumeDescriptor</code></td><td>36-byte STFS Volume Descriptor (see table below).</td></tr>
+                    <tr><td><code>0x039D</code></td><td>4</td><td><code>u32be</code></td><td><code>DataFileCount</code></td><td>Number of external data files (<code>0</code> for single-file STFS; &gt;0 for SVOD).</td></tr>
+                    <tr><td><code>0x03A1</code></td><td>8</td><td><code>u64be</code></td><td><code>DataFileCombinedSize</code></td><td>Combined byte size of external data files (SVOD).</td></tr>
+                    <tr><td><code>0x03A9</code></td><td>4</td><td><code>u32be</code></td><td><code>DescriptorType</code></td><td><code>0</code> = STFS, <code>1</code> = SVOD.</td></tr>
+                    <tr><td><code>0x03AD</code></td><td>4</td><td><code>u32be</code></td><td><code>Reserved</code></td><td>Reserved padding.</td></tr>
+                    <tr><td><code>0x03FD</code></td><td>20</td><td><code>u8[20]</code></td><td><code>DeviceID</code></td><td>Target storage device identifier (following Series/Season/Episode fields at <code>0x03B1..0x03FC</code>).</td></tr>
+                    <tr><td><code>0x0411</code></td><td>2304</td><td><code>u16be[9][128]</code></td><td><code>DisplayName</code></td><td>9 localized UTF-16BE display names (256 bytes each).</td></tr>
+                    <tr><td><code>0x0D11</code></td><td>2304</td><td><code>u16be[9][128]</code></td><td><code>DisplayDescription</code></td><td>9 localized UTF-16BE descriptions (256 bytes each).</td></tr>
+                    <tr><td><code>0x1611</code></td><td>128</td><td><code>u16be[64]</code></td><td><code>PublisherName</code></td><td>UTF-16BE publisher string.</td></tr>
+                    <tr><td><code>0x1691</code></td><td>128</td><td><code>u16be[64]</code></td><td><code>TitleName</code></td><td>UTF-16BE title string.</td></tr>
+                    <tr><td><code>0x1711</code></td><td>1</td><td><code>u8</code></td><td><code>TransferFlags</code></td><td>Profile/device transfer capability bitmask.</td></tr>
+                    <tr><td><code>0x1712</code></td><td>8</td><td><code>u32be[2]</code></td><td><code>ThumbSizes</code></td><td><code>ThumbnailImageSize</code> and <code>TitleThumbnailImageSize</code> (bytes).</td></tr>
+                    <tr><td><code>0x171A</code></td><td>16384</td><td><code>u8[0x4000]</code></td><td><code>ThumbnailImage</code></td><td>PNG content icon (up to 16 KB in v0/v1).</td></tr>
+                    <tr><td><code>0x571A</code></td><td>16384</td><td><code>u8[0x4000]</code></td><td><code>TitleThumbnailImage</code></td><td>PNG title icon (up to 16 KB in v0/v1).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>STFS Volume Descriptor (0x24 bytes at 0x0379 — Mixed Endianness!)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>1</td><td><code>u8</code></td><td><code>DescriptorLength</code></td><td>Always <code>0x24</code> (36 bytes).</td></tr>
+                    <tr><td><code>0x01</code></td><td>1</td><td><code>u8</code></td><td><code>Reserved</code></td><td><code>0x00</code>.</td></tr>
+                    <tr><td><code>0x02</code></td><td>1</td><td><code>u8</code></td><td><code>BlockSeparation</code></td><td>Bit 0: <code>1</code> = Read-Only (Female, 1 hash block/table), <code>0</code> = Read-Write (Male, 2 hash blocks/table). Bit 1: root hash table active index.</td></tr>
+                    <tr><td><code>0x03</code></td><td>2</td><td><code>u16le</code></td><td><code>FileTableBlockCount</code></td><td><strong>Little-Endian</strong> count of <code>0x1000</code>-byte blocks in the File Entry Table.</td></tr>
+                    <tr><td><code>0x05</code></td><td>3</td><td><code>u24le</code></td><td><code>FileTableBlockNumber</code></td><td><strong>Little-Endian</strong> starting data block index of the File Entry Table.</td></tr>
+                    <tr><td><code>0x08</code></td><td>20</td><td><code>u8[20]</code></td><td><code>TopHashTableHash</code></td><td>SHA-1 hash of the highest active hash table (L0, L1, or L2).</td></tr>
+                    <tr><td><code>0x1C</code></td><td>4</td><td><code>u32be</code></td><td><code>TotalAllocatedBlockCount</code></td><td><strong>Big-Endian</strong> total allocated data blocks in package.</td></tr>
+                    <tr><td><code>0x20</code></td><td>4</td><td><code>u32be</code></td><td><code>TotalUnallocatedBlockCount</code></td><td><strong>Big-Endian</strong> unallocated/free data blocks.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Hash Table Block (0x1000 bytes: 170 Hash Entries + Footer)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x000..0xFEF</code></td><td>4080</td><td><code>HashEntry[170]</code></td><td><code>Entries</code></td><td>170 entries &times; 24 bytes each.</td></tr>
+                    <tr><td><code>+0x00</code></td><td>20</td><td><code>u8[20]</code></td><td><code>Entry.Hash</code></td><td>SHA-1 of corresponding data block (L0) or child hash block (L1/L2).</td></tr>
+                    <tr><td><code>+0x14</code></td><td>1</td><td><code>u8</code></td><td><code>Entry.Status</code></td><td><code>0x00</code> = Unused, <code>0x40</code> = Free/Old, <code>0x80</code> = Used/Allocated, <code>0xC0</code> = Newly Allocated.</td></tr>
+                    <tr><td><code>+0x15</code></td><td>3</td><td><code>u24be</code></td><td><code>Entry.NextBlockNumber</code></td><td><strong>Big-Endian</strong> next data block index in file chain; <code>0xFFFFFF</code> = end of chain.</td></tr>
+                    <tr><td><code>0xFF0</code></td><td>12</td><td><code>u8[12]</code></td><td><code>Padding</code></td><td>Zero-filled padding.</td></tr>
+                    <tr><td><code>0xFFC</code></td><td>4</td><td><code>u32be</code></td><td><code>NumBlocksInTree</code></td><td>Allocated block count recorded in footer.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>File Entry Record (0x40 bytes per entry, 64 entries per 0x1000 block — Mixed Endianness!)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>40</td><td><code>char[40]</code></td><td><code>FileName</code></td><td>UTF-8 / ASCII filename, null-padded (empty entry when first byte is <code>0x00</code>).</td></tr>
+                    <tr><td><code>0x28</code></td><td>1</td><td><code>u8</code></td><td><code>FlagsAndNameLen</code></td><td>Bits 0..5: <code>NameLength</code> (<code>1..40</code>); Bit 6 (<code>0x40</code>): <code>ConsecutiveBlocks</code>; Bit 7 (<code>0x80</code>): <code>IsDirectory</code>.</td></tr>
+                    <tr><td><code>0x29</code></td><td>3</td><td><code>u24le</code></td><td><code>ValidDataBlocks</code></td><td><strong>Little-Endian</strong> count of valid blocks used by file.</td></tr>
+                    <tr><td><code>0x2C</code></td><td>3</td><td><code>u24le</code></td><td><code>AllocatedBlocks</code></td><td><strong>Little-Endian</strong> count of allocated blocks.</td></tr>
+                    <tr><td><code>0x2F</code></td><td>3</td><td><code>u24le</code></td><td><code>StartingBlockNumber</code></td><td><strong>Little-Endian</strong> first data block index (or <code>0xFFFFFF</code> for directory/empty).</td></tr>
+                    <tr><td><code>0x32</code></td><td>2</td><td><code>u16be</code></td><td><code>PathIndicator</code></td><td><strong>Big-Endian</strong> directory index of parent folder (<code>0xFFFF</code> = root directory).</td></tr>
+                    <tr><td><code>0x34</code></td><td>4</td><td><code>u32be</code></td><td><code>FileSize</code></td><td><strong>Big-Endian</strong> file size in bytes (<code>0</code> for directories).</td></tr>
+                    <tr><td><code>0x38</code></td><td>4</td><td><code>u32be</code></td><td><code>UpdateDateTime</code></td><td><strong>Big-Endian</strong> MS-DOS FAT date/time stamp.</td></tr>
+                    <tr><td><code>0x3C</code></td><td>4</td><td><code>u32be</code></td><td><code>AccessDateTime</code></td><td><strong>Big-Endian</strong> MS-DOS FAT date/time stamp.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags" class="section">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>Block &amp; Hash Tree Spacing Formulas (Female vs. Male)</h3>
+        <p>Every STFS storage block is <code>0x1000</code> (4096) bytes, starting at <code>DataStart = align_up(HeaderSize, 0x1000)</code> (typically <code>0xA000</code> for <code>HeaderSize = 0x971A</code>, or <code>0xB000</code> for v2 headers). Each hash block indexes up to <code>170</code> child blocks, creating up to three hash levels:</p>
+        <ul>
+            <li><strong>Level 0 (L0):</strong> Covers <code>170</code> data blocks per table.</li>
+            <li><strong>Level 1 (L1):</strong> Present when <code>TotalAllocatedBlockCount &gt; 170</code>; covers <code>170&sup2; = 28,900</code> data blocks per table.</li>
+            <li><strong>Level 2 (L2):</strong> Present when <code>TotalAllocatedBlockCount &gt; 28,900</code>; covers <code>170&sup3; = 4,913,000</code> data blocks per table.</li>
+        </ul>
+        <p>Let the <strong>Hash Table Spacing Factor</strong> <code>S</code> be determined by <code>BlockSeparation &amp; 1</code>:</p>
+        <ul>
+            <li><strong>Read-Only ("Female", <code>BlockSeparation &amp; 1 == 1</code>):</strong> <code>S = 1</code> (one hash block allocated per hash table; typical of <code>LIVE</code>/<code>PIRS</code> read-only distributions).</li>
+            <li><strong>Read-Write ("Male", <code>BlockSeparation &amp; 1 == 0</code>):</strong> <code>S = 2</code> (two alternating hash blocks allocated per hash table for atomic transacted updates; typical of <code>CON </code> saves and profiles).</li>
+        </ul>
+        <p>For any logical <code>dataBlock</code> index (<code>0 .. TotalAllocatedBlockCount - 1</code>), its physical <code>backingBlock</code> index relative to <code>DataStart</code> is:</p>
+        <pre><code>backingBlock(dataBlock) = dataBlock
+    + (floor(dataBlock / 170) + 1) * S
+    + (TotalAllocatedBlockCount &gt; 170 ? (floor(dataBlock / 28900) + 1) * S : 0)
+    + (TotalAllocatedBlockCount &gt; 28900 ? (floor(dataBlock / 4913000) + 1) * S : 0)
+
+fileOffset(backingBlock) = DataStart + backingBlock * 0x1000</code></pre>
+        <p>The corresponding <strong>L0 Hash Table</strong> backing block for <code>dataBlock</code> sits immediately before its 170-block data group:</p>
+        <pre><code>group = floor(dataBlock / 170)
+l0Base = group * (170 + S)
+       + (TotalAllocatedBlockCount &gt; 170 ? (floor(group / 170) + 1) * S : 0)
+       + (TotalAllocatedBlockCount &gt; 28900 ? (floor(group / 28900) + 1) * S : 0)
+# For Male (S == 2), active L0 table is l0Base + activeBit (0 or 1) from L1/root bit</code></pre>
+
+        <h3>Common ContentType Values</h3>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>STFS ContentType Enumeration (at 0x0344, u32be)</caption>
+                <thead>
+                    <tr><th>Value</th><th>Name</th><th>Typical Usage</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00000001</code></td><td><code>SavedGame</code></td><td>Console-signed savegame (<code>CON </code>).</td></tr>
+                    <tr><td><code>0x00000002</code></td><td><code>MarketplaceContent</code></td><td>Downloadable content / add-on (<code>LIVE</code>).</td></tr>
+                    <tr><td><code>0x00000003</code></td><td><code>Publisher</code></td><td>Publisher-bundled content (<code>PIRS</code>).</td></tr>
+                    <tr><td><code>0x00010000</code></td><td><code>Profile</code></td><td>User profile package containing <code>.gpd</code> files (<code>CON </code>).</td></tr>
+                    <tr><td><code>0x00090000</code></td><td><code>TitleUpdate</code></td><td>Executable/asset patch package (<code>LIVE</code> / <code>PIRS</code>).</td></tr>
+                    <tr><td><code>0x000D0000</code></td><td><code>ArcadeTitle</code></td><td>Xbox LIVE Arcade game package (<code>LIVE</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="edge-cases" class="section">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>Contiguous (<code>0x40</code>) vs. Chained Blocks:</strong> When <code>FlagsAndNameLen &amp; 0x40</code> is set, a file's logical blocks are allocated sequentially (<code>StartingBlockNumber, StartingBlockNumber + 1, ...</code>). When bit 6 is clear, follow <code>NextBlockNumber</code> (<code>u24be</code>) inside entry <code>currentBlock % 170</code> of the active L0 hash table until <code>0xFFFFFF</code> or <code>AllocatedBlocks</code> is reached. Note that some modified <code>CON </code> files set the contiguous bit inconsistently; falling back to L0 chaining whenever <code>NextBlockNumber &lt; TotalAllocatedBlockCount</code> prevents truncation.</li>
+            <li><strong>Active Hash Table in Male (<code>S = 2</code>) Packages:</strong> In read-write packages, each hash table occupies two consecutive <code>0x1000</code> blocks. The active top-level table is selected by <code>(BlockSeparation &gt;&gt; 1) &amp; 1</code>, and lower-level active table indices are stored in bit 6 (<code>0x40</code>) of the parent hash entry's status/block flags (with fallback: pick whichever of the two candidate blocks matches the parent SHA-1 hash).</li>
+            <li><strong>Directory Reconstruction &amp; <code>PathIndicator</code>:</strong> The File Entry Table is a flat array of <code>0x40</code>-byte records across <code>FileTableBlockCount</code> blocks. Entries with <code>FileName[0] == 0x00</code> are deleted/unused. Folders have <code>FlagsAndNameLen &amp; 0x80</code> set; child files/folders reference their parent's 0-based index in the File Entry Table via <code>PathIndicator</code> (<code>0xFFFF</code> denotes root).</li>
+            <li><strong>SVOD Mode (<code>DescriptorType == 1</code>):</strong> If <code>0x03A9</code> equals <code>1</code>, the package header still begins with <code>LIVE</code>/<code>PIRS</code>, but the 36-byte descriptor at <code>0x0379</code> is an SVOD Volume Descriptor rather than STFS, and payload blocks live in external <code>Data0000</code>, <code>Data0001</code>, ... files.</li>
+            <li><strong>End-of-File Truncation:</strong> The last data block of a file is zero-padded (or stale-padded) to <code>0x1000</code>; always slice output strictly to <code>FileSize</code> bytes.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode" class="section">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function OpenStfsPackage(stream):
+    magic = stream.ReadBytes(0x0000, 4)
+    assert magic in ["CON ", "PIRS", "LIVE"]
+
+    headerSize = stream.ReadU32BE(0x0340)
+    descType = stream.ReadU32BE(0x03A9)
+    assert descType == 0  # STFS (1 = SVOD)
+
+    dataStart = (headerSize + 0xFFF) &amp; ~0xFFF
+    if dataStart &lt; 0xA000:
+        dataStart = 0xA000
+
+    # Volume Descriptor at 0x0379 (Mixed endianness!)
+    blockSep = stream.ReadU8(0x037B)
+    S = (blockSep &amp; 1) == 1 ? 1 : 2
+    rootActiveBit = (blockSep &gt;&gt; 1) &amp; 1
+    ftBlockCount = stream.ReadU16LE(0x037C)
+    ftStartBlock = stream.ReadU24LE(0x037E)
+    totalBlocks = stream.ReadU32BE(0x0395)
+
+    function DataToBacking(db):
+        b = db + (floor(db / 170) + 1) * S
+        if totalBlocks &gt; 170:
+            b += (floor(db / 28900) + 1) * S
+        if totalBlocks &gt; 28900:
+            b += (floor(db / 4913000) + 1) * S
+        return b
+
+    function ReadL0NextBlock(db):
+        grp = floor(db / 170)
+        l0Backing = grp * (170 + S)
+        if totalBlocks &gt; 170:
+            l0Backing += (floor(grp / 170) + 1) * S
+        if totalBlocks &gt; 28900:
+            l0Backing += (floor(grp / 28900) + 1) * S
+        # Select active table (for S==2, verify via parent hash or active bit)
+        tableOff = dataStart + (l0Backing + (S == 2 ? ActiveL0Bit(grp, rootActiveBit) : 0)) * 0x1000
+        entryOff = tableOff + (db % 170) * 24
+        return stream.ReadU24BE(entryOff + 0x15)
+
+    function ReadBlockChain(startBlock, blockCount, contiguous, maxBytes):
+        out = ByteBuffer()
+        cur = startBlock
+        while cur != 0xFFFFFF and len(out) &lt; maxBytes:
+            phys = DataToBacking(cur)
+            chunk = stream.ReadBytes(dataStart + phys * 0x1000, min(0x1000, maxBytes - len(out)))
+            out.Append(chunk)
+            if contiguous:
+                cur = cur + 1
+                if blockCount &gt; 0 and (cur - startBlock) &gt;= blockCount:
+                    break
+            else:
+                cur = ReadL0NextBlock(cur)
+        return out
+
+    # Parse File Entry Table
+    ftBytes = ReadBlockChain(ftStartBlock, ftBlockCount, contiguous=false, maxBytes=ftBlockCount * 0x1000)
+    entries = []
+    for idx in 0 .. (len(ftBytes) / 0x40) - 1:
+        rec = ftBytes[idx * 0x40 : (idx + 1) * 0x40]
+        if rec[0] == 0:
+            break
+        flags = rec[0x28]
+        nameLen = flags &amp; 0x3F
+        entries.append({
+            Index: idx,
+            Name: DecodeUtf8(rec[0 : nameLen]),
+            IsDir: (flags &amp; 0x80) != 0,
+            Contiguous: (flags &amp; 0x40) != 0,
+            ValidBlocks: ReadU24LE(rec, 0x29),
+            StartBlock: ReadU24LE(rec, 0x2F),
+            ParentIndex: ReadU16BE(rec, 0x32),
+            FileSize: ReadU32BE(rec, 0x34)
+        })
+    return entries</code></pre>
+    </section>
+
+    <section id="provenance" class="section">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn">
+            <p><strong>Signature &amp; Console Key Caveat:</strong> <code>LIVE</code> and <code>PIRS</code> signatures are generated using Microsoft private RSA-2048 keys, and <code>CON </code> package signatures are tied to per-console RSA-1024 private keys stored inside hardware fuses/keyvaults. <strong>No Microsoft or console private keys are included here.</strong> Reading and verifying internal SHA-1 hash trees requires no secret keys, whereas forging valid signatures for unmodified retail consoles is not possible without key material.</p>
+        </aside>
+        <ul>
+            <li><strong>High Confidence (Confirmed Layout &amp; Hashing):</strong> Magic signatures, mixed-endian Volume Descriptor and File Entry record layouts, Female/Male hash table spacing formulas, and SHA-1 L0/L1/L2 tree verification are completely verified across retail packages and open-source STFS implementations.</li>
+            <li><strong>Schema Revisions:</strong> <code>MetadataVersion == 2</code> expands localized string slots and thumbnail buffers beyond <code>0x971A</code> (pushing <code>DataStart</code> to <code>0xB000</code> or <code>0xC000</code>); always compute <code>DataStart</code> from <code>HeaderSize</code> at <code>0x0340</code> rather than hardcoding <code>0xA000</code>.</li>
+        </ul>
+    </section>
+</body>
+</html>

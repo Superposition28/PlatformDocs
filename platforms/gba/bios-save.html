@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BIOS SWI Compression &amp; Save Media IDs — Game Boy Advance — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#gba" target="_top">Game Boy Advance</a><span>/</span><span>BIOS SWI Compression &amp; Save IDs</span>
+    </nav>
+
+    <h1>GBA BIOS SWI Compression Headers &amp; Cartridge Save Media IDs</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Game Boy Advance &middot; System BIOS Streams &amp; Backup Media Identification</p>
+        <p>The GBA 16 KiB system BIOS provides built-in decompression and filtering routines invoked via Software Interrupts (<code>SWI 0x10&ndash;0x18</code>) operating on a standardized 32-bit little-endian stream header. Separately, because the 192-byte cartridge header contains no save-type field, official SDK backup libraries embed word-aligned ASCII identification strings inside the ROM image to declare EEPROM, SRAM/FRAM, or Flash save hardware.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd>Embedded streams inside <code>*.gba</code> / <code>*.mb</code> / <code>*.bin</code>; external save dumps <code>*.sav</code>, <code>*.eep</code>, <code>*.srm</code></dd>
+            <dt>Magic Bytes</dt>
+            <dd>BIOS header byte <code>0x00</code>: <code>0x10</code> (LZ77), <code>0x24</code>/<code>0x28</code> (Huffman), <code>0x30</code> (RLE), <code>0x81</code>/<code>0x82</code> (Diff); Save IDs: <code>EEPROM_V</code>, <code>SRAM_V</code>, <code>SRAM_F_V</code>, <code>FLASH_V</code>, <code>FLASH512_V</code>, <code>FLASH1M_V</code></dd>
+            <dt>Endianness</dt>
+            <dd>Little-Endian 32-bit headers and Huffman bit-words; big-endian 16-bit LZ77 length/displacement tokens</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo Game Boy Advance System BIOS (<code>SWI 0x10&ndash;0x18</code>) &amp; Game Pak Backup Bus (<code>0x0D000000</code> / <code>0x0E000000</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Platform-standard compressed asset streams &amp; backup media descriptors (<code>application/octet-stream</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>This specification covers two platform-inherited mechanisms defined by GBA BIOS and Nintendo AGB SDK hardware conventions:</p>
+        <ul>
+            <li><strong>BIOS SWI Compression &amp; Filtering Streams (<code>SWI 0x10&ndash;0x18</code>):</strong> All compressed/filtered streams share a 32-bit little-endian Data Header where bits <code>4..7</code> identify the algorithm (<code>1</code> = LZ77, <code>2</code> = Huffman, <code>3</code> = Run-Length, <code>8</code> = Differential Filter) and bits <code>8..31</code> encode the uncompressed output byte length. Note that <code>BitUnPack</code> (<code>SWI 0x10</code>) uses a separate 8-byte parameter struct instead of the 32-bit stream header.</li>
+            <li><strong>Cartridge Save Media Identification Strings:</strong> Because the <code>0x000&ndash;0x0BF</code> cartridge header omits save media metadata, official SDK libraries link a 4-byte-aligned ASCII identifier string (suffixed with a 3-digit library version <code>Vnnn</code>) into the ROM image.</li>
+            <li><strong>Endianness Rules:</strong> Stream headers and Huffman bitstream words are read as <code>u32le</code>, whereas LZ77 2-byte back-references pack the length nibble in the upper bits of byte 0 and the 12-bit displacement across both bytes in big-endian order.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="BIOS 32-bit Compression Header" tabindex="0">
+            <table class="format-counts">
+                <caption>BIOS SWI 0x11&ndash;0x18 Common 32-Bit Data Header (4 Bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code> (bits <code>0..3</code>)</td>
+                        <td>4 bits</td>
+                        <td>u8 (low nibble)</td>
+                        <td>Unit / Sub-Info</td>
+                        <td><code>0</code> for LZ77/RLE; symbol bit-width (<code>4</code> or <code>8</code>) for Huffman; unit byte size (<code>1</code> = 8-bit, <code>2</code> = 16-bit) for Diff filter.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00</code> (bits <code>4..7</code>)</td>
+                        <td>4 bits</td>
+                        <td>u8 (high nibble)</td>
+                        <td>Compression Type</td>
+                        <td><code>1</code> = LZ77 (<code>0x10</code>), <code>2</code> = Huffman (<code>0x24</code>/<code>0x28</code>), <code>3</code> = Run-Length (<code>0x30</code>), <code>8</code> = Differential Filter (<code>0x81</code>/<code>0x82</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01</code> (bits <code>8..31</code>)</td>
+                        <td>3 B</td>
+                        <td>u24le</td>
+                        <td>Decompressed Size</td>
+                        <td>Exact uncompressed output size in bytes (<code>header_u32 &gt;&gt; 8</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="LZ77 and RLE block formats" tabindex="0">
+            <table class="format-counts">
+                <caption>LZ77 (SWI 0x11/0x12) &amp; Run-Length (SWI 0x14/0x15) Stream Records</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>LZ77 block <code>+0x00</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Flag Byte</td>
+                        <td>8 bits evaluated MSB-to-LSB (bit <code>7</code> down to bit <code>0</code>): <code>0</code> = 1 literal byte, <code>1</code> = 2-byte compressed reference.</td>
+                    </tr>
+                    <tr>
+                        <td>LZ77 token <code>+0x00</code></td>
+                        <td>2 B</td>
+                        <td>u16be</td>
+                        <td>Length / Disp Token</td>
+                        <td>When flag bit = <code>1</code>: bits <code>15..12</code> = <code>length - 3</code> (3..18 bytes); bits <code>11..0</code> = <code>disp - 1</code> (back-offset 1..4096 bytes).</td>
+                    </tr>
+                    <tr>
+                        <td>RLE packet <code>+0x00</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>RLE Flag Byte</td>
+                        <td>Bit <code>7</code> = <code>1</code>: compressed run of length <code>(flag &amp; 0x7F) + 3</code>; Bit <code>7</code> = <code>0</code>: uncompressed literal run of length <code>(flag &amp; 0x7F) + 1</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>RLE packet <code>+0x01</code></td>
+                        <td>1 B or <code>len</code> B</td>
+                        <td>u8 / u8[]</td>
+                        <td>RLE Payload</td>
+                        <td>1 repeated byte when flag bit <code>7 == 1</code>, or <code>(flag &amp; 0x7F) + 1</code> literal bytes when flag bit <code>7 == 0</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Huffman and BitUnPack layouts" tabindex="0">
+            <table class="format-counts">
+                <caption>Huffman (SWI 0x13) Tree Layout &amp; BitUnPack (SWI 0x10) Parameter Block</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Huff <code>0x04</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td><code>TreeSize</code></td>
+                        <td>Encoded tree size: total tree table length in bytes is <code>(TreeSize + 1) * 2</code> (bitstream starts at <code>0x05 + TreeSize * 2 + 1</code>, i.e., <code>0x04 + (TreeSize + 1) * 2</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>Huff <code>0x05</code></td>
+                        <td><code>TreeSize*2 + 1</code> B</td>
+                        <td>u8[]</td>
+                        <td>Tree Node Table</td>
+                        <td>Root node at <code>0x05</code>; each internal node has bits <code>0..5</code> offset, bit <code>6</code> = Node 1 End Flag, bit <code>7</code> = Node 0 End Flag. Leaf nodes are 8-bit symbols.</td>
+                    </tr>
+                    <tr>
+                        <td>Huff bitstream</td>
+                        <td>4 B * N</td>
+                        <td>u32le[]</td>
+                        <td>Compressed Bitstream</td>
+                        <td>Read in 32-bit little-endian words, traversed MSB-first (bit <code>31</code> down to bit <code>0</code>): <code>0</code> takes Node 0, <code>1</code> takes Node 1.</td>
+                    </tr>
+                    <tr>
+                        <td>BitUnPack <code>0x00</code></td>
+                        <td>2 B</td>
+                        <td>u16le</td>
+                        <td>Source Length</td>
+                        <td>Length of source data in bytes (<code>0..0xFFFF</code>), passed via struct pointer in <code>r2</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>BitUnPack <code>0x02</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Source Bit Width</td>
+                        <td>Source unit bit depth: <code>1</code>, <code>2</code>, <code>4</code>, or <code>8</code> bits.</td>
+                    </tr>
+                    <tr>
+                        <td>BitUnPack <code>0x03</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Dest Bit Width</td>
+                        <td>Destination unit bit depth: <code>1</code>, <code>2</code>, <code>4</code>, <code>8</code>, <code>16</code>, or <code>32</code> bits.</td>
+                    </tr>
+                    <tr>
+                        <td>BitUnPack <code>0x04</code></td>
+                        <td>4 B</td>
+                        <td>u32le</td>
+                        <td>Data Offset &amp; Zero Flag</td>
+                        <td>Bits <code>0..30</code> added to non-zero units; bit <code>31</code> (<code>0x80000000</code>) = Zero Data Flag (also add offset to zero-valued units).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Save Media Identification Strings" tabindex="0">
+            <table class="format-counts">
+                <caption>Cartridge Save Media ASCII Identifier Strings &amp; Hardware Mapping</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">ID Prefix</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Bus / Address Window</th>
+                        <th scope="col">Capacity</th>
+                        <th scope="col">Hardware Behavior</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>EEPROM_Vnnn</code></td>
+                        <td>11 B + NUL</td>
+                        <td><code>0x0D000000&ndash;0x0DFFFFFF</code> (or <code>0x0DFFFF00&ndash;0x0DFFFFFF</code>)</td>
+                        <td>512 B (4 Kbit) or 8 KiB (64 Kbit)</td>
+                        <td>Serial bitstream accessed via 16-bit DMA3 transfers; exact capacity inferred from 6-bit vs. 14-bit address width in first read/write packet.</td>
+                    </tr>
+                    <tr>
+                        <td><code>SRAM_Vnnn</code> / <code>SRAM_F_Vnnn</code></td>
+                        <td>9/11 B + NUL</td>
+                        <td><code>0x0E000000&ndash;0x0E007FFF</code> (8-bit bus)</td>
+                        <td>32 KiB (256 Kbit)</td>
+                        <td>Battery-backed SRAM or non-volatile FRAM; directly byte-readable/writable at <code>0x0E000000</code> with 8 waitstates recommended in <code>WAITCNT</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>FLASH_Vnnn</code></td>
+                        <td>10 B + NUL</td>
+                        <td><code>0x0E000000&ndash;0x0E00FFFF</code> (8-bit bus)</td>
+                        <td>64 KiB (512 Kbit)</td>
+                        <td>Early SDK 64 KiB Flash ID; requires command sequences at <code>0x0E005555</code> / <code>0x0E002AAA</code> to erase sectors and program bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>FLASH512_Vnnn</code></td>
+                        <td>13 B + NUL</td>
+                        <td><code>0x0E000000&ndash;0x0E00FFFF</code> (8-bit bus)</td>
+                        <td>64 KiB (512 Kbit)</td>
+                        <td>Updated SDK 64 KiB Flash ID; functionally identical command protocol to <code>FLASH_Vnnn</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>FLASH1M_Vnnn</code></td>
+                        <td>12 B + NUL</td>
+                        <td><code>0x0E000000&ndash;0x0E00FFFF</code> (2 banks)</td>
+                        <td>128 KiB (1 Mbit)</td>
+                        <td>Bank-switched 128 KiB Flash; selects 64 KiB bank <code>0</code> or <code>1</code> via unlock + <code>0xB0</code> command before writing bank byte to <code>0x0E000000</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <div class="table-scroll" role="region" aria-label="BIOS SWI Decompression Opcodes" tabindex="0">
+            <table class="format-counts">
+                <caption>GBA BIOS SWI Data Unpacking &amp; Decompression Functions (0x10&ndash;0x18)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">SWI Number</th>
+                        <th scope="col">BIOS Function</th>
+                        <th scope="col">Header Type Nibble</th>
+                        <th scope="col">Write Unit &amp; Target</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td><code>BitUnPack</code></td>
+                        <td>None (<code>r2</code> info block)</td>
+                        <td>32-bit writes; expands 1/2/4/8-bit units to 1/2/4/8/16/32-bit units.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x11</code></td>
+                        <td><code>LZ77UnCompWram</code></td>
+                        <td><code>1</code> (<code>0x10</code>)</td>
+                        <td>8-bit writes (WRAM only; unsafe for VRAM).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x12</code></td>
+                        <td><code>LZ77UnCompVram</code></td>
+                        <td><code>1</code> (<code>0x10</code>)</td>
+                        <td>16-bit writes (VRAM-safe; <code>disp &ge; 2</code> required).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x13</code></td>
+                        <td><code>HuffUnComp</code></td>
+                        <td><code>2</code> (<code>0x24</code> or <code>0x28</code>)</td>
+                        <td>32-bit writes (WRAM and VRAM safe; packs 4-bit or 8-bit symbols into 32-bit words).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td><code>RLUnCompWram</code></td>
+                        <td><code>3</code> (<code>0x30</code>)</td>
+                        <td>8-bit writes (WRAM only).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x15</code></td>
+                        <td><code>RLUnCompVram</code></td>
+                        <td><code>3</code> (<code>0x30</code>)</td>
+                        <td>16-bit writes (VRAM-safe).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x16</code></td>
+                        <td><code>Diff8bitUnFilterWram</code></td>
+                        <td><code>8</code> (<code>0x81</code>)</td>
+                        <td>8-bit writes; reverses 8-bit horizontal delta encoding (<code>out[i] = out[i-1] + in[i]</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x17</code></td>
+                        <td><code>Diff8bitUnFilterVram</code></td>
+                        <td><code>8</code> (<code>0x81</code>)</td>
+                        <td>16-bit writes; reverses 8-bit delta encoding for VRAM.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td><code>Diff16bitUnFilter</code></td>
+                        <td><code>8</code> (<code>0x82</code>)</td>
+                        <td>16-bit writes; reverses 16-bit horizontal delta encoding (<code>out16[i] = out16[i-1] + in16[i]</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Algorithm Decoding Formulas</h3>
+        <ul>
+            <li><strong>LZ77 Token (<code>b0, b1</code>):</strong> <code>copy_len = ((b0 &gt;&gt; 4) &amp; 0x0F) + 3</code> (3..18); <code>disp = (((b0 &amp; 0x0F) &lt;&lt; 8) | b1) + 1</code> (1..4096); copies byte-by-byte from <code>out_pos - disp</code> (allowing overlapping RLE-style self-copy when <code>disp &lt; copy_len</code>).</li>
+            <li><strong>Huffman Child Addressing:</strong> Given current node at byte offset <code>node_off</code> (relative to stream start) and node byte <code>node_val</code>:
+                <code>child0_off = (node_off &amp; ~1) + ((node_val &amp; 0x3F) * 2) + 2</code>;
+                <code>child1_off = child0_off + 1</code>.
+                If bit <code>7</code> of <code>node_val</code> is set, <code>child0_off</code> is a leaf data byte; if bit <code>6</code> is set, <code>child1_off</code> is a leaf data byte.</li>
+            <li><strong>4-bit vs. 8-bit Huffman Packing:</strong> When <code>header &amp; 0x0F == 4</code>, decoded 4-bit symbols are packed LSB-first into each 32-bit output word (8 symbols per <code>u32le</code>). When <code>header &amp; 0x0F == 8</code>, 4 bytes are packed LSB-first per <code>u32le</code>.</li>
+            <li><strong>Flash Chip Identification &amp; 128 KiB Bank Switch:</strong> Writing unlock sequence <code>[0x0E005555]=0xAA</code>, <code>[0x0E002AAA]=0x55</code>, <code>[0x0E005555]=0x90</code> enters ID mode where <code>[0x0E000000]</code> returns manufacturer ID and <code>[0x0E000001]</code> returns device ID (confirmed hardware IDs: <code>0xD4BF</code> SST 64K, <code>0x1CC2</code> Macronix 64K, <code>0x3D1F</code> Atmel 64K, <code>0x09C2</code> Macronix 128K, <code>0x1362</code> Sanyo 128K). Bank switching on 128 KiB Flash uses <code>[0x0E005555]=0xAA</code>, <code>[0x0E002AAA]=0x55</code>, <code>[0x0E005555]=0xB0</code>, <code>[0x0E000000]=bank</code> (<code>0</code> or <code>1</code>), and <code>0xF0</code> terminates ID/command mode.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>VRAM 16-Bit Write &amp; LZ77 Displacement Rule:</strong> Because GBA VRAM ignores byte-wide writes by duplicating the byte across both halves of a 16-bit write, <code>LZ77UnCompVram</code> (<code>SWI 0x12</code>) buffers halfwords and writes in 16-bit units. Consequently, a raw displacement of <code>0</code> (<code>disp = 1</code> byte back) fails on real hardware because the odd byte has not been committed to VRAM yet; encoders targeting VRAM must enforce <code>disp &ge; 2</code> (encoded 12-bit offset <code>&ge; 0x001</code>).</li>
+            <li><strong>Decompressed Size Padding &amp; Alignment:</strong> For <code>HuffUnComp</code> (<code>SWI 0x13</code>), output is always written in 32-bit words; if the uncompressed size is not a multiple of 4, extra trailing bits/bytes in the final word are written.</li>
+            <li><strong>Save ID String Scanning Rules:</strong> When scanning a <code>.gba</code> ROM for save media strings:
+                <ol>
+                    <li>Scan on <strong>4-byte aligned offsets</strong> (<code>offset % 4 == 0</code>), as official SDK libraries place the string in word-aligned constant pools.</li>
+                    <li>Match exact ASCII prefix followed by 3 ASCII digits (<code>'0'..'9'</code>) and a terminating NUL (or space/non-alphanumeric) byte.</li>
+                    <li>Distinguish <code>FLASH_V</code> / <code>FLASH512_V</code> (64 KiB) from <code>FLASH1M_V</code> (128 KiB), and <code>SRAM_V</code> / <code>SRAM_F_V</code> (32 KiB) from <code>EEPROM_V</code> (512 B or 8 KiB).</li>
+                    <li>If multiple strings appear (rare) or none appear (homebrew/no-save ROMs), default gracefully to <code>None</code> unless an explicit hardware configuration overrides it.</li>
+                </ol>
+            </li>
+            <li><strong>EEPROM Address Window vs. Large ROMs:</strong> On ROMs &le; 16 MiB, EEPROM responds across <code>0x0D000000&ndash;0x0DFFFFFF</code>; on ROMs &gt; 16 MiB (up to 32 MiB), the ROM extends into <code>0x0D000000&ndash;0x0DF00000</code>, so EEPROM decoding is restricted to <code>0x0DFFFF00&ndash;0x0DFFFFFF</code>.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function decompress_bios_stream(src, offset):
+    header = read_u32le(src, offset)
+    comp_type = (header &gt;&gt; 4) &amp; 0x0F
+    sub_info  = header &amp; 0x0F
+    out_size  = (header &gt;&gt; 8) &amp; 0x00FFFFFF
+
+    if comp_type == 1:  # LZ77 (0x10)
+        pos = offset + 4
+        out = byte[out_size]
+        out_pos = 0
+        while out_pos &lt; out_size:
+            flags = src[pos]; pos += 1
+            for bit in range(7, -1, -1):
+                if out_pos &gt;= out_size:
+                    break
+                if (flags &amp; (1 &lt;&lt; bit)) == 0:
+                    out[out_pos] = src[pos]; pos += 1; out_pos += 1
+                else:
+                    b0 = src[pos]; b1 = src[pos + 1]; pos += 2
+                    length = ((b0 &gt;&gt; 4) &amp; 0x0F) + 3
+                    disp   = (((b0 &amp; 0x0F) &lt;&lt; 8) | b1) + 1
+                    if disp &gt; out_pos:
+                        error("LZ77 displacement before start of output")
+                    for _ in range(length):
+                        if out_pos &gt;= out_size: break
+                        out[out_pos] = out[out_pos - disp]
+                        out_pos += 1
+        return out
+
+    elif comp_type == 2:  # Huffman (0x24 / 0x28)
+        bit_width = sub_info  # 4 or 8
+        tree_size = src[offset + 4]
+        root_off  = offset + 5
+        stream_off = offset + 4 + (tree_size + 1) * 2
+        out = byte[out_size]
+        out_pos = 0
+        node_off = root_off
+        word_pos = stream_off
+        nibble_buf = 0; have_low_nibble = false
+        while out_pos &lt; out_size:
+            w = read_u32le(src, word_pos); word_pos += 4
+            for bit in range(31, -1, -1):
+                if out_pos &gt;= out_size: break
+                dir = (w &gt;&gt; bit) &amp; 1
+                node_val = src[node_off]
+                child_off = (node_off &amp; ~1) + ((node_val &amp; 0x3F) * 2) + 2 + dir
+                is_leaf = ((node_val &amp; (0x80 &gt;&gt; dir)) != 0)
+                if is_leaf:
+                    sym = src[child_off]
+                    if bit_width == 8:
+                        out[out_pos] = sym; out_pos += 1
+                    else:  # 4-bit symbol packed LSB-first
+                        if not have_low_nibble:
+                            nibble_buf = sym &amp; 0x0F; have_low_nibble = true
+                        else:
+                            out[out_pos] = nibble_buf | ((sym &amp; 0x0F) &lt;&lt; 4)
+                            out_pos += 1; have_low_nibble = false
+                    node_off = root_off
+                else:
+                    node_off = child_off
+        return out
+
+    elif comp_type == 3:  # Run-Length (0x30)
+        pos = offset + 4
+        out = byte[out_size]
+        out_pos = 0
+        while out_pos &lt; out_size:
+            flag = src[pos]; pos += 1
+            if (flag &amp; 0x80) != 0:
+                run_len = (flag &amp; 0x7F) + 3
+                val = src[pos]; pos += 1
+                for _ in range(run_len):
+                    if out_pos &gt;= out_size: break
+                    out[out_pos] = val; out_pos += 1
+            else:
+                lit_len = (flag &amp; 0x7F) + 1
+                for _ in range(lit_len):
+                    if out_pos &gt;= out_size: break
+                    out[out_pos] = src[pos]; pos += 1; out_pos += 1
+        return out
+
+    else:
+        error("Unsupported or Diff-filter compression type")
+
+function detect_save_media_id(rom_bytes):
+    prefixes = ["EEPROM_V", "SRAM_V", "SRAM_F_V", "FLASH1M_V", "FLASH512_V", "FLASH_V"]
+    matches = []
+    for off in range(0, len(rom_bytes) - 12, 4):  # 4-byte aligned scan
+        for p in prefixes:
+            if rom_bytes[off : off + len(p)] == ascii(p):
+                ver = rom_bytes[off + len(p) : off + len(p) + 3]
+                if all_ascii_digits(ver):
+                    matches.append((off, p + decode_ascii(ver)))
+    return matches</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>The 32-bit BIOS compression headers, SWI <code>0x10&ndash;0x18</code> behaviors, LZ77/Huffman/RLE bit-level decoding rules, Flash <code>0x0E005555</code>/<code>0x0E002AAA</code> command sequences, and SDK save ID string prefixes are <span class="badge confidence-confirmed">Confirmed Hardware/BIOS Spec</span> behaviors documented in GBATEK and verified against GBA BIOS disassembly.</p>
+        <aside class="callout-warn" aria-label="Save detection caveats">
+            <p><strong>Save Detection Caveats:</strong> Save ID string detection is an <span class="badge confidence-revision">SDK-Revision Convention</span> rather than a hardware register; homebrew or custom-linked ROMs without Nintendo SDK backup libraries may omit these strings entirely. Furthermore, <code>EEPROM_Vnnn</code> does not distinguish 512-byte (4 Kbit) from 8 KiB (64 Kbit) EEPROM chips—the size must be inferred dynamically from the bit count of the first EEPROM DMA3 transfer (9-bit vs. 17-bit header before payload).</p>
+        </aside>
+    </section>
+</body>
+</html>

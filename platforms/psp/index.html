@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PlayStation Portable (PSP) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <span>PlayStation Portable</span>
+    </nav>
+
+    <h1>PlayStation Portable (PSP)</h1>
+
+    <section class="format-summary" aria-label="Platform summary">
+        <p class="eyebrow">Platform Overview · Allegrex MIPS32r2 · Little-Endian</p>
+        <p>Sony's PlayStation Portable (PSP-1000 through PSP-3000, PSP Go N1000, and PSP Street E1000) is a 32-bit little-endian MIPS handheld platform. System software boots signed/encrypted containers from Universal Media Disc (UMD) optical media (<code>disc0:/</code>), Memory Stick PRO Duo (<code>ms0:/</code>), or internal flash storage (<code>ef0:/</code> on PSP Go) through hardware cryptographic verification on the Kirk security engine.</p>
+        <dl>
+            <dt>Primary CPU</dt>
+            <dd>Sony/Toshiba Allegrex MIPS32r2 (32-bit little-endian, 1–333 MHz, FPU + VFPU vector coprocessor, 16 KiB I-cache / 16 KiB D-cache)</dd>
+            <dt>Media &amp; Coprocessors</dt>
+            <dd>Media Engine (secondary MIPS32r2 + VME) for media decoding; Kirk hardware crypto engine (AES-128, SHA-1, ECDSA, PRNG)</dd>
+            <dt>Main Memory</dt>
+            <dd>32 MiB RAM on PSP-1000 (<code>0x08000000–0x09FFFFFF</code>); 64 MiB RAM on PSP-2000+ (<code>0x08000000–0x0BFFFFFF</code>), plus 16 KiB scratchpad (<code>0x00010000</code>)</dd>
+            <dt>Boot Media</dt>
+            <dd>UMD ISO-9660 (<code>disc0:/</code>) via <code>PSP_GAME/SYSDIR/EBOOT.BIN</code>, and Memory Stick / Flash (<code>ms0:/</code>, <code>ef0:/</code>) via <code>EBOOT.PBP</code></dd>
+            <dt>OS &amp; Module ABI</dt>
+            <dd>PSP Kernel / VSH (XMB) loading relocatable ELF32-MIPS PRX modules (<code>0xFFA0</code>) linked dynamically by 32-bit NID tables</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#architecture">Hardware &amp; Memory Map</a></li>
+            <li><a href="#boot-chain">UMD &amp; Memory Stick Boot Chain</a></li>
+            <li><a href="#formats">Platform Format Specifications</a></li>
+            <li><a href="#scope">Scope Boundary</a></li>
+        </ul>
+    </nav>
+
+    <section id="architecture" class="section">
+        <h2>Hardware &amp; Memory Map</h2>
+        <p>Every platform-inherited binary format on the PSP uses <strong>little-endian</strong> byte ordering (<code>ELFDATA2LSB</code>) to match the Allegrex MIPS32r2 core. Kernel and user code operate across standard MIPS segments mapped into physical DRAM and internal scratchpad:</p>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Allegrex MIPS Logical Address Regions</caption>
+                <thead>
+                    <tr>
+                        <th>Address Range</th>
+                        <th>Size</th>
+                        <th>Region</th>
+                        <th>Access / Role</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00010000–0x00013FFF</code></td>
+                        <td>16 KiB</td>
+                        <td>Scratchpad RAM</td>
+                        <td>Fast local SRAM</td>
+                        <td>On-chip data scratchpad for low-latency buffers</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04000000–0x041FFFFF</code></td>
+                        <td>2 MiB</td>
+                        <td>VRAM (eDRAM)</td>
+                        <td>GE display / framebuffers</td>
+                        <td>Mirrorable as uncached/swizzled video memory</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08000000–0x087FFFFF</code></td>
+                        <td>8 MiB</td>
+                        <td>Kernel / System Partitions</td>
+                        <td>Kernel-mode protected</td>
+                        <td>Kernel modules, VSH/system allocations (user space starts at <code>0x08800000</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08800000–0x09FFFFFF</code></td>
+                        <td>24 MiB</td>
+                        <td>User Main RAM (Base)</td>
+                        <td>User applications &amp; games</td>
+                        <td>Default user partition on PSP-1000 (32 MiB total system RAM)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0A000000–0x0BFFFFFF</code></td>
+                        <td>32 MiB</td>
+                        <td>Extended User RAM</td>
+                        <td>PSP-2000+ / <code>MEMSIZE=1</code></td>
+                        <td>Enabled when <code>PARAM.SFO</code> sets <code>MEMSIZE=1</code> (64 MiB total RAM)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x88000000–0x8BFFFFFF</code></td>
+                        <td>32 / 64 MiB</td>
+                        <td><code>kseg0</code> Kernel Alias</td>
+                        <td>Cached kernel address space</td>
+                        <td>Used by kernel PRX modules loaded into kernel partitions</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="boot-chain" class="section">
+        <h2>UMD &amp; Memory Stick Boot Chain</h2>
+        <p>The PSP XMB shell and kernel executive recognize two primary launch paths depending on the storage device:</p>
+        <ol>
+            <li><strong>UMD Optical Disc (<code>disc0:/</code>):</strong> The ISO-9660 volume presents <code>/UMD_DATA.BIN</code> and <code>/PSP_GAME/PARAM.SFO</code> to the XMB for title identification, firmware version checks (<code>PSP_SYSTEM_VER</code>), and graphical preview assets (<code>ICON0.PNG</code>, <code>PIC1.PNG</code>, <code>SND0.AT3</code>). When launched, the kernel mounts <code>disc0:/</code> and passes <code>/PSP_GAME/SYSDIR/EBOOT.BIN</code> (a <code>~PSP</code>-encrypted PRX executable) to <code>sceKernelLoadModule</code>.</li>
+            <li><strong>Memory Stick / Internal Flash (<code>ms0:/</code>, <code>ef0:/</code>):</strong> Digital titles, demos, firmware updaters, and homebrew reside in <code>PSP/GAME/&lt;folder&gt;/EBOOT.PBP</code>. The <code>\x00PBP</code> container packs <code>PARAM.SFO</code>, XMB media assets, the executable payload <code>DATA.PSP</code>, and an optional <code>DATA.PSAR</code> archive into a single flat file.</li>
+            <li><strong>Kernel Module Loading &amp; Dynamic Linking:</strong> Once decrypted by the Kirk engine (or accepted directly on devkit/custom environments), the ELF32-MIPS PRX image (<code>e_type = 0xFFA0</code>) is relocated according to its <code>SHT_PRXRELOC</code> table, inspected via <code>.rodata.sceModuleInfo</code>, and dynamically linked against kernel and system libraries by matching 32-bit NIDs in <code>.lib.stub</code> against exported NIDs in <code>.lib.ent</code>.</li>
+        </ol>
+    </section>
+
+    <section id="formats" class="section">
+        <h2>Platform Format Specifications</h2>
+        <p>Each specification below covers a strictly platform-inherited Sony PSP container, metadata table, executable, or disc image format:</p>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PlayStation Portable Format Index</caption>
+                <thead>
+                    <tr>
+                        <th>Format</th>
+                        <th>Magic / Identifier</th>
+                        <th>Canonical Files</th>
+                        <th>Summary</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><a href="../../index.html#psp-pbp" target="_top">EBOOT.PBP Container</a></td>
+                        <td><code>00 50 42 50</code> (<code>\x00PBP</code>)</td>
+                        <td><code>EBOOT.PBP</code>, <code>*.PBP</code></td>
+                        <td>Fixed 8-section container bundling <code>PARAM.SFO</code>, XMB icons/backgrounds/audio, <code>DATA.PSP</code> executable, and optional <code>DATA.PSAR</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#psp-param-sfo" target="_top">PARAM.SFO Metadata Table</a></td>
+                        <td><code>00 50 53 46</code> (<code>\x00PSF</code>)</td>
+                        <td><code>PARAM.SFO</code></td>
+                        <td>Little-endian PSF key/value table storing <code>DISC_ID</code>, <code>CATEGORY</code>, <code>PSP_SYSTEM_VER</code>, <code>MEMSIZE</code>, localized titles, and savedata attributes.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#psp-prx-elf" target="_top">~PSP &amp; PRX / ELF32-MIPS</a></td>
+                        <td><code>7E 50 53 50</code> (<code>~PSP</code>) / <code>7F 45 4C 46</code></td>
+                        <td><code>EBOOT.BIN</code>, <code>BOOT.BIN</code>, <code>*.PRX</code>, <code>DATA.PSP</code></td>
+                        <td>Kirk-encrypted <code>~PSP</code> wrapper and relocatable ELF32-MIPS modules (<code>0xFFA0</code>) with <code>.rodata.sceModuleInfo</code>, NID stubs, and MIPS relocations.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#psp-umd-iso" target="_top">UMD ISO-9660, UMD_DATA.BIN &amp; CSO/DAX</a></td>
+                        <td><code>CD001</code> / <code>CISO</code> / <code>DAX\x00</code></td>
+                        <td><code>*.iso</code>, <code>UMD_DATA.BIN</code>, <code>*.cso</code>, <code>*.dax</code></td>
+                        <td>Standard UMD ISO-9660 tree (<code>PSP_GAME/SYSDIR/</code>), <code>UMD_DATA.BIN</code> disc descriptor, and block-compressed CSO/CISO and DAX image containers.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="scope" class="section">
+        <h2>Scope Boundary</h2>
+        <aside class="callout">
+            <p><strong>Platform-inherited formats only:</strong> This section documents Sony PSP hardware, firmware, and standard preservation image formats. Individual game archives (for example, contents inside <code>PSP_GAME/USRDIR/</code>), proprietary middleware formats, and title-specific data structures are excluded.</p>
+        </aside>
+    </section>
+</body>
+</html>

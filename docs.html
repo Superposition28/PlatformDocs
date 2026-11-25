@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Documentation Guide — PlatformDocs</title>
+    <link rel="stylesheet" href="style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="index.html#home" target="_top">PlatformDocs</a><span>/</span><span>Documentation Guide</span>
+    </nav>
+
+    <h1>PlatformDocs Documentation Guide</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">CONVENTIONS &amp; ARCHITECTURE</p>
+        <p>PlatformDocs is a standalone, pure-static clean-room reference for <strong>platform-inherited binary formats</strong> across 11 hardware and OS targets. Every specification is structured so an independent engineer can implement a conforming parser or loader without external code or proprietary SDKs.</p>
+        <dl>
+            <dt>Scope</dt>
+            <dd>Hardware, firmware, disc/cartridge, executable, and OS/SDK-mandated formats only</dd>
+            <dt>Delivery Model</dt>
+            <dd>Zero-dependency static HTML/CSS working directly via <code>file://</code></dd>
+            <dt>Specification Contract</dt>
+            <dd>Mandatory 6-section clean-room layout with fixed-width binary types and pseudocode</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#scope-boundary">1. Strict Scope Boundary</a></li>
+            <li><a href="#executable-rule">2. Executable &amp; Binary Rule</a></li>
+            <li><a href="#spec-standard">3. 6-Section Specification Standard</a></li>
+            <li><a href="#provenance-conventions">4. Provenance &amp; Confidence</a></li>
+            <li><a href="#shell-architecture">5. Static Shell &amp; Lazy Routing</a></li>
+            <li><a href="#adding-pages">6. Adding a Platform or Format Page</a></li>
+        </ul>
+    </nav>
+
+    <section class="section" id="scope-boundary">
+        <h2>1. Strict Scope Boundary</h2>
+        <p>Every file documented in PlatformDocs must be <strong>inherited directly from the target platform, console SDK, boot ROM, or operating system</strong>. A format belongs here only if the platform vendor's hardware, firmware, system shell, or standard OS loader requires or defines it.</p>
+        <ul>
+            <li><strong>In scope:</strong> Cartridge/ROM headers, optical disc image filesystems and volume descriptors, platform executables and relocatable modules, system metadata descriptors (such as title IDs, parental ratings, and region flags), system banners/icons/trophies, digital distribution packages, and standard OS debug/installer containers.</li>
+            <li><strong>Out of scope:</strong> All title-specific assets, third-party middleware packs, studio scene/mesh/texture containers, audio banks, level scripts, localization tables, and proprietary studio archive formats. Never include title names, studio names, or game-specific file paths in specifications.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Boundary check:</strong> If a file extension or container is created by a third-party engine or individual software title rather than mandated by the platform holder or OS ABI, it does not belong in PlatformDocs.</p>
+        </aside>
+    </section>
+
+    <section class="section" id="executable-rule">
+        <h2>2. Executable &amp; Binary Rule</h2>
+        <p>Platform executables, firmware images, and dynamic/relocatable libraries (such as GBA/NDS ROM images, GameCube/Wii <code>.dol</code> and <code>.rel</code>, PSP <code>.prx</code>, PS2 <code>.elf</code>/<code>.irx</code>, PS3/PS4 <code>SELF</code>/<code>FSELF</code>, Windows <code>PE/COFF</code>, Xbox <code>.xbe</code>, and Xbox 360 <code>.xex</code>) are documented strictly at the <strong>container, loader, and ABI boundary</strong>:</p>
+        <ul>
+            <li><strong>Document in full:</strong> Container wrappers, magic signatures, architecture/machine identifiers, program and section headers, segment/section tables, BSS declarations, import/export tables, relocation record types, entry points, and OS/SDK capability or entitlement metadata.</li>
+            <li><strong>Generalized loader mapping only:</strong> Describe how a loader validates bounds, decompresses or unwraps segments, maps code/data payloads into virtual or physical memory, zero-fills BSS ranges, and applies relocations. Do not document instruction-set emulation, title-specific symbol maps, or proprietary runtime logic.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="spec-standard">
+        <h2>3. Clean-Room 6-Section Specification Standard</h2>
+        <p>Every format page under <code>platforms/&lt;slug&gt;/</code> must present a consistent header block (<code>&lt;h1&gt;</code>, <code>.format-summary</code> with <code>&lt;dl&gt;</code> metadata, and <code>.page-toc</code>) followed by six numbered sections with stable anchor IDs:</p>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Mandatory 6-Section Format Page Structure</caption>
+                <thead>
+                    <tr>
+                        <th>Section</th>
+                        <th>Anchor ID</th>
+                        <th>Required Contents</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>1. Identification &amp; Scope</td>
+                        <td><code>#identification</code></td>
+                        <td>Canonical filenames/extensions, exact magic bytes (hex and ASCII), endianness, platform/OS applicability, and system role.</td>
+                    </tr>
+                    <tr>
+                        <td>2. Binary Layout Tables</td>
+                        <td><code>#layout</code></td>
+                        <td>Scrollable <code>.format-counts</code> tables (<code>Offset | Size | Type | Field | Description</code>) for every header, directory, and sub-record using exact hex offsets and fixed-width types (<code>u8</code>, <code>u16le</code>/<code>u16be</code>, <code>u32le</code>/<code>u32be</code>, <code>u64le</code>/<code>u64be</code>, <code>char[N]</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>3. Flags, Enums &amp; Decoding Formulas</td>
+                        <td><code>#flags</code></td>
+                        <td>Bitmasks, enumeration tables, address/offset derivation formulas, pixel/tile/compression math, and version-to-version deltas.</td>
+                    </tr>
+                    <tr>
+                        <td>4. Edge Cases &amp; Loader/Parser Rules</td>
+                        <td><code>#edge-cases</code></td>
+                        <td>Bounds and overflow checks, alignment/padding rules, zero-size or sentinel records, revision branching, and generalized loader mapping.</td>
+                    </tr>
+                    <tr>
+                        <td>5. Step-by-Step Pseudocode</td>
+                        <td><code>#pseudocode</code></td>
+                        <td>Complete, clean-room parser pseudocode inside <code>&lt;pre&gt;&lt;code&gt;</code> covering validation, header parsing, table traversal, and error exits.</td>
+                    </tr>
+                    <tr>
+                        <td>6. Provenance &amp; Confidence</td>
+                        <td><code>#provenance</code></td>
+                        <td>Explicit separation of confirmed hardware/OS specs, SDK-revision-dependent behavior, and unverified/reserved fields using <code>.callout-warn</code> for caveats.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="provenance-conventions">
+        <h2>4. Provenance &amp; Confidence Conventions</h2>
+        <p>Specifications must never conflate verified ABI definitions with empirical guesses or fabricate undocumented constants. Classify structural claims explicitly using the shared badge conventions:</p>
+        <div class="badge-group">
+            <span class="badge confidence-confirmed">Confirmed Spec</span>
+            <span class="badge confidence-revision">SDK-Revision-Dependent</span>
+            <span class="badge confidence-unverified">Unverified / Reserved</span>
+            <span class="scope-badge">Platform-Inherited</span>
+        </div>
+        <ul>
+            <li><strong>Confirmed Spec:</strong> Verified against public hardware documentation, open ABI specifications, boot ROM invariants, or deterministic format checks across retail media.</li>
+            <li><strong>SDK-Revision-Dependent:</strong> Header sizes, optional extended headers, encryption/signing wrappers, or enum values known to vary across SDK generations, hardware revisions, or system firmware updates.</li>
+            <li><strong>Unverified / Reserved:</strong> Fields observed as zero-filled padding, opaque capability bits, or vendor-reserved bytes whose exact runtime interpretation is not independently confirmed.</li>
+        </ul>
+        <aside class="callout">
+            <p><strong>No fabricated constants:</strong> If a cryptographic key, hash seed, or undocumented bitflag cannot be stated from verified public knowledge, record it explicitly as reserved or vendor-private rather than inventing a placeholder value.</p>
+        </aside>
+    </section>
+
+    <section class="section" id="shell-architecture">
+        <h2>5. Static <code>file://</code> Shell &amp; Lazy Iframe Routing Architecture</h2>
+        <p>The documentation site runs directly from the local filesystem via <code>file://</code> without a local web server, build step, or JavaScript framework:</p>
+        <ul>
+            <li><strong>CSS <code>:target</code> routing:</strong> <code>index.html</code> renders <code>#home</code> by default when no fragment is active (<code>.home-page { display: block; }</code>) and hides it whenever any <code>.page:target</code> matches (<code>.pages:has(.page:target) .home-page:not(:target)</code>).</li>
+            <li><strong>Lazy-loaded iframes:</strong> Each guide, platform overview, and format specification is declared as <code>&lt;iframe class="page" id="&lt;route&gt;" data-src="&lt;path&gt;" src="about:blank" loading="lazy"&gt;</code>. All 54 content pages stay unloaded at <code>about:blank</code> until selected.</li>
+            <li><strong>Minimal hash router script:</strong> On initial load and <code>hashchange</code>, the inline script in <code>index.html</code> reads <code>location.hash</code>, assigns <code>iframe.src = iframe.dataset.src</code> on first visit if still blank, and updates the fixed topbar's <code>#up-link</code> target (format routes <code>&lt;platform&gt;-&lt;format&gt;</code> resolve up to <code>#&lt;platform&gt;</code>; platform overviews and <code>#docs-guide</code> resolve up to <code>#home</code>).</li>
+            <li><strong>Standalone compatibility:</strong> Every page under <code>platforms/</code> and <code>docs.html</code> links <code>style/main.css</code> relatively and sets <code>target="_top"</code> on breadcrumb links so pages work both inside the shell iframe and when opened directly.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="adding-pages">
+        <h2>6. Adding a New Platform or Format Page</h2>
+        <ol>
+            <li><strong>Verify scope:</strong> Confirm the format is strictly platform-inherited (boot, container, executable, OS metadata, or system UI) with zero title-specific dependencies.</li>
+            <li><strong>Create the HTML page:</strong> Add <code>platforms/&lt;slug&gt;/index.html</code> (for a new platform) or <code>platforms/&lt;slug&gt;/&lt;format&gt;.html</code> using <code>&lt;body class="doc-page"&gt;</code>, <code>../../style/main.css</code>, and <code>target="_top"</code> breadcrumbs pointing to <code>../../index.html#home</code> and <code>../../index.html#&lt;slug&gt;</code>.</li>
+            <li><strong>Follow the 6-section contract:</strong> Populate <code>.format-summary</code>, <code>.page-toc</code>, and all six sections (<code>#identification</code>, <code>#layout</code>, <code>#flags</code>, <code>#edge-cases</code>, <code>#pseudocode</code>, <code>#provenance</code>).</li>
+            <li><strong>Register the route in <code>index.html</code>:</strong>
+                <ul>
+                    <li>Add the lazy <code>&lt;iframe class="page" id="&lt;route&gt;" data-src="platforms/&lt;slug&gt;/&lt;file&gt;.html" src="about:blank" loading="lazy" title="..."&gt;&lt;/iframe&gt;</code> inside <code>&lt;main class="pages"&gt;</code>.</li>
+                    <li>Add the link to the platform's card in <code>.documentation-tree</code> and update the summary counts in <code>.format-coverage</code>.</li>
+                    <li>If adding a new platform slug, add it to the longest-first prefix list in the inline <code>#up-link</code> script in <code>index.html</code> (for example, ensuring longer prefixes such as <code>xbox360</code> precede shorter prefixes such as <code>xbox</code>).</li>
+                </ul>
+            </li>
+            <li><strong>Validate via <code>file://</code>:</strong> Open <code>index.html</code> directly in a browser, verify <code>#home</code>, <code>#docs-guide</code>, the platform overview, the format page, <code>Up</code> / <code>Back</code> navigation, and narrow viewport wrapping (<code>&lt;= 600px</code>).</li>
+        </ol>
+    </section>
+</body>
+</html>

@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>SYSTEM.CNF &amp; PS2 Disc Layout — PlayStation 2 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps2" target="_top">PlayStation 2</a><span>/</span><span>SYSTEM.CNF &amp; Optical Disc Layout</span>
+    </nav>
+
+    <h1>SYSTEM.CNF Boot Descriptor &amp; PS2 Optical Disc Layout</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">PLAYSTATION 2 · BOOT CONFIGURATION &amp; OPTICAL FILESYSTEM <span class="scope-badge">Platform-Inherited</span></p>
+        <p><code>SYSTEM.CNF</code> is the mandatory ASCII boot configuration descriptor placed in the root directory of every bootable PlayStation 2 CD-ROM or DVD-ROM. It instructs the Boot ROM (<code>OSDSYS</code> / <code>EELOAD</code>) which Emotion Engine executable to launch, which video region mode to initialize, and whether HDD/network power hardware is requested, all resolved over an ISO-9660 (ECMA-119) filesystem—paired with a UDF 1.02 bridge on DVD media.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>SYSTEM.CNF</code> (recorded in ISO-9660 root as <code>SYSTEM.CNF;1</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>SYSTEM.CNF</code>: none (ASCII <code>KEY = VALUE</code> text starting with <code>BOOT2</code>). Disc Volume: <code>43 44 30 30 31</code> (<code>CD001</code>) at LBA 16 (<code>0x8000</code>); UDF bridge adds <code>BEA01</code> / <code>NSR02</code> / <code>TEA01</code></dd>
+            <dt>Endianness</dt>
+            <dd><code>SYSTEM.CNF</code>: ASCII text. ISO-9660: dual-endian (<code>u16le+u16be</code> / <code>u32le+u32be</code>) and single-byte fields. UDF: Little-Endian</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 2 Boot ROM (<code>OSDSYS</code>), <code>CDVDMAN</code> IOP optical filesystem driver</dd>
+            <dt>Role/MIME</dt>
+            <dd>Boot configuration descriptor (<code>text/plain</code>) &amp; optical disc volume image (<code>application/x-iso9660-image</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary &amp; Record Layout Tables</a></li>
+            <li><a href="#flags">3. Keys, Flags &amp; Naming Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section class="section" id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>PlayStation 2 optical media exists in two physical families, both exposing an ISO-9660 directory hierarchy to the IOP <code>cdrom0:</code> filesystem driver:</p>
+        <ul>
+            <li><strong>PS2 CD-ROM:</strong> 2048-byte user sectors in Mode 2 Form 1 (or 2352-byte raw sectors in <code>.bin</code> dumps containing a 24-byte sync/header/subheader prefix and 280-byte EDC/ECC trailer). Formatted with ISO-9660 Level 1/2.</li>
+            <li><strong>PS2 DVD-ROM (DVD-5 / DVD-9):</strong> 2048-byte sectors formatted as an <strong>ISO-9660 + UDF 1.02 Bridge</strong>. The ISO-9660 Primary Volume Descriptor sits at LBA 16 (<code>0x8000</code>), followed by the UDF Volume Recognition Sequence (<code>BEA01</code>, <code>NSR02</code>, <code>TEA01</code>) and a UDF Anchor Volume Descriptor Pointer (AVDP) at LBA 256 (<code>0x80000</code>). The PS2 Boot ROM and <code>CDVDMAN</code> mount the ISO-9660 tree directly.</li>
+            <li><strong>PS1 vs. PS2 Distinction:</strong> Original PlayStation discs use <code>BOOT = cdrom:\...</code> inside <code>SYSTEM.CNF</code>, whereas PlayStation 2 discs use <code>BOOT2 = cdrom0:\...</code>.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="layout">
+        <h2>2. Binary &amp; Record Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>ISO-9660 Primary Volume Descriptor (LBA 16 / Offset 0x8000, Key Fields, 2048 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x000</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>type_code</code></td>
+                        <td>Volume descriptor type: <code>0x01</code> for Primary Volume Descriptor (PVD), <code>0xFF</code> for Terminator.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x001</code></td>
+                        <td>5</td>
+                        <td><code>char[5]</code></td>
+                        <td><code>standard_id</code></td>
+                        <td>Constant ASCII signature <code>"CD001"</code> (<code>43 44 30 30 31</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x006</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>version</code></td>
+                        <td>Volume descriptor version, always <code>0x01</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x008</code></td>
+                        <td>32</td>
+                        <td><code>char[32]</code></td>
+                        <td><code>system_id</code></td>
+                        <td>Space-padded system identifier; on PS2 discs conventionally <code>"PLAYSTATION                     "</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x028</code></td>
+                        <td>32</td>
+                        <td><code>char[32]</code></td>
+                        <td><code>volume_id</code></td>
+                        <td>Space-padded volume label (often matches catalog ID or volume name).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x050</code></td>
+                        <td>8</td>
+                        <td><code>both32</code></td>
+                        <td><code>volume_space_size</code></td>
+                        <td>Total logical blocks in volume (<code>u32le</code> at <code>0x050</code>, <code>u32be</code> at <code>0x054</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x080</code></td>
+                        <td>4</td>
+                        <td><code>both16</code></td>
+                        <td><code>logical_block_size</code></td>
+                        <td>Sector payload size in bytes, always <code>2048</code> (<code>0x0800</code>) on PS2 optical discs.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x09C</code></td>
+                        <td>34</td>
+                        <td><code>IsoDirRecord</code></td>
+                        <td><code>root_directory_record</code></td>
+                        <td>Embedded 34-byte Directory Record pointing to the root directory extent LBA and byte length.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>ISO-9660 Directory Record (Variable Length: 33 + len_fi + pad bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>len_dr</code></td>
+                        <td>Total byte length of this Directory Record (<code>0</code> signals padding to end of current 2048-byte sector).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>len_ear</code></td>
+                        <td>Extended Attribute Record length in logical blocks (normally <code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02</code></td>
+                        <td>8</td>
+                        <td><code>both32</code></td>
+                        <td><code>extent_lba</code></td>
+                        <td>Starting Logical Block Address of file or directory data (<code>u32le</code> at <code>0x02</code>, <code>u32be</code> at <code>0x06</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0A</code></td>
+                        <td>8</td>
+                        <td><code>both32</code></td>
+                        <td><code>data_length</code></td>
+                        <td>Size of file or directory extent in bytes (<code>u32le</code> at <code>0x0A</code>, <code>u32be</code> at <code>0x0E</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x12</code></td>
+                        <td>7</td>
+                        <td><code>u8[7]</code></td>
+                        <td><code>recording_date</code></td>
+                        <td>Year-1900, Month, Day, Hour, Minute, Second, GMT offset (signed 15-min units).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x19</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>file_flags</code></td>
+                        <td>Entry attributes bitmask (<code>0x02</code> = Directory, <code>0x80</code> = Multi-extent).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1A</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>file_unit_size</code></td>
+                        <td>Interleave file unit size (<code>0</code> if non-interleaved).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1B</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>interleave_gap</code></td>
+                        <td>Interleave gap size (<code>0</code> if non-interleaved).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>both16</code></td>
+                        <td><code>vol_seq_number</code></td>
+                        <td>Volume sequence number (typically <code>1</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>len_fi</code></td>
+                        <td>Byte length of <code>file_identifier</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x21</code></td>
+                        <td><code>len_fi</code></td>
+                        <td><code>char[]</code></td>
+                        <td><code>file_identifier</code></td>
+                        <td>Filename (e.g. <code>SYSTEM.CNF;1</code>) or <code>0x00</code> (<code>.</code>) / <code>0x01</code> (<code>..</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x21 + len_fi</code></td>
+                        <td>0 or 1</td>
+                        <td><code>u8</code></td>
+                        <td><code>padding</code></td>
+                        <td>Present when <code>len_fi</code> is even, aligning the record to an even byte boundary.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>UDF 1.02 Bridge Structures on PS2 DVD-ROM (LBA 17+ VRS &amp; LBA 256 AVDP)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>LBA 17..19</code></td>
+                        <td>2048 each</td>
+                        <td><code>UdfVrsDesc</code></td>
+                        <td><code>vrs_sequence</code></td>
+                        <td>Consecutive 2048-byte Volume Recognition Descriptors with standard IDs <code>"BEA01"</code>, <code>"NSR02"</code>, and <code>"TEA01"</code> at byte <code>+0x01</code> (after ISO-9660 Volume Descriptor Set Terminator at LBA 17 or 18).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x80000 + 0x00</code></td>
+                        <td>16</td>
+                        <td><code>UdfTag</code></td>
+                        <td><code>avdp_tag</code></td>
+                        <td>UDF Anchor Volume Descriptor Pointer at LBA 256: <code>tag_id = 0x0002</code> (<code>u16le</code>), <code>desc_ver = 2</code>, <code>tag_location = 256</code> (<code>u32le</code> at <code>+0x0C</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x80000 + 0x10</code></td>
+                        <td>8</td>
+                        <td><code>UdfExtentAd</code></td>
+                        <td><code>main_vds_extent</code></td>
+                        <td><code>u32le length</code> + <code>u32le location</code> (LBA) of Main Volume Descriptor Sequence.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x80000 + 0x18</code></td>
+                        <td>8</td>
+                        <td><code>UdfExtentAd</code></td>
+                        <td><code>reserve_vds_extent</code></td>
+                        <td><code>u32le length</code> + <code>u32le location</code> (LBA) of Reserve Volume Descriptor Sequence.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>SYSTEM.CNF Line-Oriented Text Schema (ASCII Key-Value Pairs)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Line 1 (<code>0x00</code>)</td>
+                        <td>Variable</td>
+                        <td><code>ASCII text</code></td>
+                        <td><code>BOOT2</code></td>
+                        <td>Required PS2 boot target path, e.g. <code>BOOT2 = cdrom0:\SLUS_200.01;1</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>Variable</td>
+                        <td>Variable</td>
+                        <td><code>ASCII text</code></td>
+                        <td><code>VER</code></td>
+                        <td>Required software version string, e.g. <code>VER = 1.00</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>Variable</td>
+                        <td>Variable</td>
+                        <td><code>ASCII text</code></td>
+                        <td><code>VMODE</code></td>
+                        <td>Required display standard: <code>NTSC</code> or <code>PAL</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>Variable</td>
+                        <td>Variable</td>
+                        <td><code>ASCII text</code></td>
+                        <td><code>HDDUNITPOWER</code></td>
+                        <td>Optional HDD / Network Adaptor power directive (e.g. <code>NICHDD</code>, <code>NIC</code>, <code>HDD</code>, <code>NONE</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="flags">
+        <h2>3. Keys, Flags &amp; Naming Formulas</h2>
+
+        <h3>SYSTEM.CNF Key Semantics</h3>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>SYSTEM.CNF Directives and Allowed Values</caption>
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Required</th>
+                        <th>Syntax / Enum Values</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>BOOT2</code></td>
+                        <td>Yes</td>
+                        <td><code>cdrom0:\&lt;PATH&gt;;1</code></td>
+                        <td>Device prefix <code>cdrom0:</code>, backslash directory separators, uppercase 8.3 path, mandatory <code>;1</code> ISO-9660 version suffix.</td>
+                    </tr>
+                    <tr>
+                        <td><code>VER</code></td>
+                        <td>Yes</td>
+                        <td><code>&lt;major&gt;.&lt;minor&gt;</code> (e.g. <code>1.00</code>)</td>
+                        <td>Printed or inspected by <code>OSDSYS</code> / diagnostics; numeric dotted decimal string.</td>
+                    </tr>
+                    <tr>
+                        <td><code>VMODE</code></td>
+                        <td>Yes</td>
+                        <td><code>NTSC</code> | <code>PAL</code></td>
+                        <td>Selects initial GS video timing (<code>NTSC</code> 60 Hz for North America/Japan; <code>PAL</code> 50 Hz for Europe/Oceania).</td>
+                    </tr>
+                    <tr>
+                        <td><code>HDDUNITPOWER</code></td>
+                        <td>No</td>
+                        <td><code>NICHDD</code> | <code>NIC</code> | <code>HDD</code> | <code>NONE</code></td>
+                        <td>Controls whether Expansion Bay Network Adaptor / ATA HDD power rails stay enabled across boot.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Disc ID &amp; Boot Executable Naming Convention</h3>
+        <p>Retail PS2 boot executables follow an 8.3-compatible catalog identifier formatted as <code>PPPP_NNN.NN</code> (for example, <code>SLUS_200.01</code> or <code>SCES_500.01</code>):</p>
+        <ul>
+            <li><strong>First character (<code>S</code>):</strong> Standard Sony PlayStation software prefix.</li>
+            <li><strong>Second character (<code>C</code> / <code>L</code> / <code>P</code>):</strong> <code>C</code> = Sony first-party, <code>L</code> = third-party licensee, <code>P</code> = demo/promotional or special retail SKU.</li>
+            <li><strong>Third &amp; fourth characters (Region):</strong> <code>US</code> = North America, <code>ES</code> = Europe/PAL, <code>PS</code> / <code>PM</code> = Japan (NTSC-J), <code>KA</code> = Korea, <code>AJ</code> = Asia.</li>
+            <li><strong>Numeric suffix (<code>_NNN.NN</code>):</strong> 5-digit catalog number split into 3 digits, a dot, and 2 digits to satisfy ISO-9660 8.3 filename rules (stored on disc with <code>;1</code> appended).</li>
+        </ul>
+
+        <h3>ISO-9660 Dual-Endian &amp; File Flag Formulas</h3>
+        <ul>
+            <li><strong>Dual-Endian Validation:</strong> For <code>both32</code> fields, <code>le_val = read_u32le(buf, off)</code> and <code>be_val = read_u32be(buf, off + 4)</code>; conforming discs satisfy <code>le_val == be_val</code>.</li>
+            <li><strong><code>file_flags</code> (offset <code>0x19</code>):</strong> Bit <code>0x01</code> = Hidden/Existence, <code>0x02</code> = Directory, <code>0x04</code> = Associated File, <code>0x08</code> = Extended Attribute Record format, <code>0x10</code> = Permissions in EAR, <code>0x80</code> = Multi-extent (file continues in subsequent Directory Record).</li>
+        </ul>
+    </section>
+
+    <section class="section" id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>ISO-9660 <code>;1</code> Version Suffix:</strong> ISO-9660 Directory Records store file identifiers with a trailing version number (<code>;1</code>). PS2 <code>OSDSYS</code> expects <code>BOOT2</code> to include <code>;1</code> explicitly (e.g. <code>cdrom0:\SLUS_200.01;1</code>); a general parser should strip <code>;1</code> only when normalizing paths for host filesystems, while preserving exact matching for <code>cdrom0:</code> resolution.</li>
+            <li><strong>Whitespace &amp; Line Endings:</strong> Tools and SDKs emit either <code>\r\n</code> (CRLF) or <code>\n</code> (LF) and may place spaces around <code>=</code> (<code>BOOT2 = ...</code> or <code>BOOT2=...</code>). Parsers must trim whitespace around keys, values, and trailing line breaks, and ignore empty lines.</li>
+            <li><strong>Raw 2352-byte CD Sectors vs. 2048-byte Cooked Images:</strong> DVD-ROM images always store 2048 bytes per sector. Raw CD-ROM Mode 2 Form 1 dumps store 2352 bytes per sector, where user data starts at byte <code>+24</code> inside each raw frame (12B sync + 4B header + 8B subheader). Checking for <code>CD001</code> at both <code>16 * 2048 + 1</code> (<code>0x8001</code>) and <code>16 * 2352 + 24 + 1</code> (<code>0x9319</code>) distinguishes cooked vs. raw Mode 2 Form 1 images cleanly.</li>
+            <li><strong>Sector-Boundary Padding in ISO-9660 Directories:</strong> Directory Records never cross a 2048-byte sector boundary. When remaining space in a sector is smaller than the next record, the remaining bytes are zero-filled and <code>len_dr == 0</code> signals the parser to advance to the start of the next 2048-byte sector until <code>data_length</code> bytes have been consumed.</li>
+            <li><strong>DVD-9 Dual-Layer Discs:</strong> Dual-layer PS2 DVDs place the ISO-9660/UDF directory tree and <code>SYSTEM.CNF;1</code> on Layer 0. Files located on Layer 1 may carry valid ISO-9660 LBAs beyond the Layer 0 boundary, or may be addressed through secondary layer metadata managed by <code>CDVDMAN</code>.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function parse_ps2_system_cnf(disc_reader):
+    # 1. Detect 2048-byte cooked vs 2352-byte Mode 2 Form 1 raw sector layout
+    if disc_reader.read(0x8001, 5) == b"CD001":
+        sector_stride = 2048
+        data_offset   = 0
+    elif disc_reader.read(16 * 2352 + 24 + 1, 5) == b"CD001":
+        sector_stride = 2352
+        data_offset   = 24
+    else:
+        error("ISO-9660 PVD signature CD001 not found at LBA 16")
+
+    def read_sector(lba):
+        return disc_reader.read(lba * sector_stride + data_offset, 2048)
+
+    # 2. Scan Volume Descriptor Set starting at LBA 16 for PVD (type == 1)
+    pvd = null
+    for lba in 16 .. 64:
+        sec = read_sector(lba)
+        if sec[1..6] != b"CD001":
+            break
+        if sec[0] == 0x01:
+            pvd = sec
+            break
+        if sec[0] == 0xFF:
+            break
+    if pvd is null:
+        error("Primary Volume Descriptor missing")
+
+    block_size = u16le(pvd[0x80..0x82])
+    assert block_size == 2048
+    root_dr = pvd[0x9C .. 0x9C + 34]
+    root_lba = u32le(root_dr[0x02..0x06])
+    root_len = u32le(root_dr[0x0A..0x0E])
+
+    # 3. Traverse ISO-9660 directory extent
+    function find_in_dir(dir_lba, dir_len, target_upper):
+        bytes_read = 0
+        cur_lba = dir_lba
+        while bytes_read &lt; dir_len:
+            sec = read_sector(cur_lba)
+            pos = 0
+            while pos &lt; 2048 and bytes_read + pos &lt; dir_len:
+                len_dr = sec[pos]
+                if len_dr == 0:
+                    break  # advance to next sector
+                rec = sec[pos .. pos + len_dr]
+                len_fi = rec[0x20]
+                name = ascii(rec[0x21 .. 0x21 + len_fi]).upper()
+                if name == target_upper or name.split(";")[0] == target_upper.split(";")[0]:
+                    return {
+                        "lba": u32le(rec[0x02..0x06]),
+                        "size": u32le(rec[0x0A..0x0E]),
+                        "flags": rec[0x19]
+                    }
+                pos += len_dr
+            bytes_read += 2048
+            cur_lba += 1
+        return null
+
+    # 4. Locate and parse SYSTEM.CNF;1
+    cnf_entry = find_in_dir(root_lba, root_len, "SYSTEM.CNF;1")
+    if cnf_entry is null:
+        error("SYSTEM.CNF;1 not found in ISO-9660 root")
+
+    cnf_bytes = read_file_extent(cnf_entry.lba, cnf_entry.size)
+    config = {}
+    for raw_line in ascii(cnf_bytes).splitlines():
+        line = raw_line.strip()
+        if line == "" or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        config[key.strip().upper()] = val.strip()
+
+    if "BOOT2" not in config:
+        error("Missing BOOT2 directive (not a PS2 SYSTEM.CNF)")
+
+    # 5. Resolve cdrom0:\&lt;PATH&gt;;1 to target EE ELF extent
+    boot_path = config["BOOT2"]
+    assert boot_path.lower().startswith("cdrom0:\\")
+    rel_parts = boot_path[8:].split("\\")
+    cur_lba, cur_len = root_lba, root_len
+    for i, part in enumerate(rel_parts):
+        entry = find_in_dir(cur_lba, cur_len, part.upper())
+        if entry is null:
+            error("Boot executable not found: " + part)
+        if i &lt; len(rel_parts) - 1:
+            assert (entry.flags &amp; 0x02) != 0
+            cur_lba, cur_len = entry.lba, entry.size
+        else:
+            config["boot_elf_extent"] = entry
+    return config</code></pre>
+    </section>
+
+    <section class="section" id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>
+            <span class="badge confidence-confirmed">Confirmed Spec</span>
+            <span class="badge confidence-revision">SDK-Revision-Dependent</span>
+        </p>
+        <ul>
+            <li><strong>Confirmed Spec:</strong> ISO-9660 (ECMA-119) PVD and Directory Record layouts, UDF 1.02 VRS/AVDP descriptors (OSTA UDF 1.02 / ECMA-167), Mode 2 Form 1 2352-byte framing, and PS2 <code>SYSTEM.CNF</code> core keys (<code>BOOT2</code>, <code>VER</code>, <code>VMODE</code>) are standardized and verified across retail PS2 media and Boot ROM behavior.</li>
+            <li><strong>SDK-Revision-Dependent:</strong> <code>HDDUNITPOWER</code> appears in later Sony PS2 SDK revisions supporting the Expansion Bay HDD/Network Adaptor; older titles omit it entirely.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Caveat on Dual-Layer &amp; UDF Parsing:</strong> While retail PS2 DVD-ROMs carry a UDF 1.02 bridge alongside ISO-9660, the PS2 Boot ROM itself mounts ISO-9660. Do not assume files visible only in UDF structures are reachable through standard <code>cdrom0:</code> Boot ROM paths.</p>
+        </aside>
+    </section>
+</body>
+</html>

@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wii Optical Disc Layout — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#wii" target="_top">Nintendo Wii</a>
+        <span>/</span>
+        <span>Wii Optical Disc Layout</span>
+    </nav>
+
+    <h1>Wii Optical Disc Layout (RVL)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Optical Media Container · Route <code>#wii-wii-disc</code></p>
+        <p>Proprietary 12 cm optical disc image format combining an unencrypted disc header and partition directory with AES-128-CBC encrypted, RSA/SHA-1 authenticated partitions divided into <code>0x8000</code>-byte hashed clusters.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd>Raw optical sector dump (<code>*.iso</code> / <code>*.gcm</code>), or sparse/compressed external containers wrapping raw RVL disc sectors</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>0x5D1C9EA3</code> at offset <code>0x00018</code> (Wii magic); <code>0x00000000</code> at <code>0x0001C</code> (GameCube magic slot); <code>0xC3F81A8E</code> at <code>0x4FFFC</code></dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian across all disc headers, partition tables, Ticket/TMD fields, and inner FST/DOL structures</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo Wii (RVL) optical drive interface (<code>/dev/di</code>) and Starlet IOS crypto engine</dd>
+            <dt>Role/MIME</dt>
+            <dd>Encrypted multi-partition optical disc image (<code>application/x-wii-iso-image</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>A raw Wii optical disc image is a fixed-sector byte stream (single-layer <code>4,699,979,776</code> bytes = <code>2,294,912</code> × 2048-byte sectors; dual-layer <code>8,511,160,320</code> bytes = <code>4,155,840</code> × 2048-byte sectors). Unlike GameCube discs, which store an unencrypted filesystem at the disc root, a Wii disc reserves only the outer header (<code>0x00000–0x4FFFF</code>) as plaintext and encapsulates all executable and filesystem payloads inside one or more encrypted partitions.</p>
+        <ul>
+            <li><strong>Signature Distinction:</strong> At offset <code>0x00018</code>, Wii discs contain big-endian <code>5D 1C 9E A3</code> (<code>0x5D1C9EA3</code>), whereas offset <code>0x0001C</code> is zeroed (<code>00 00 00 00</code>). GameCube discs leave <code>0x00018</code> zeroed and store <code>C2 33 9F 3D</code> (<code>0xC2339F3D</code>) at <code>0x0001C</code>.</li>
+            <li><strong>Endianness:</strong> Every integer in the disc header, partition tables, Ticket, TMD, certificate chain, and decrypted partition filesystem is <strong>big-endian</strong>. Several offset and size fields store <em>word addresses</em> (shifted right by 2 bits, i.e. <code>byte_offset = field &lt;&lt; 2</code>) so 32-bit fields can address up to 16 GiB on dual-layer discs.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="Unencrypted disc header" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.1 — Unencrypted Disc Header (0x00000–0x000FF)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>DiscId</code></td>
+                        <td>ASCII system prefix (e.g., <code>0x52</code> <code>'R'</code> or <code>0x53</code> <code>'S'</code> for retail Wii discs).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0001</code></td>
+                        <td>2</td>
+                        <td><code>char[2]</code></td>
+                        <td><code>GameCode</code></td>
+                        <td>Two-character ASCII title identifier.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0003</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>RegionCode</code></td>
+                        <td>ASCII region byte (e.g., <code>'E'</code> NTSC-U, <code>'P'</code> PAL, <code>'J'</code> NTSC-J, <code>'K'</code> NTSC-K).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0004</code></td>
+                        <td>2</td>
+                        <td><code>char[2]</code></td>
+                        <td><code>MakerCode</code></td>
+                        <td>Two-character ASCII licensee/publisher identifier.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0006</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>DiscNumber</code></td>
+                        <td>Zero-based disc index in multi-disc sets (<code>0x00</code> for single-disc).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0007</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>DiscVersion</code></td>
+                        <td>Disc revision number (<code>0x00</code> = initial release).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0008</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>AudioStreaming</code></td>
+                        <td>Legacy GameCube streaming flag (<code>0x00</code> on Wii).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0009</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>StreamBufSize</code></td>
+                        <td>Legacy GameCube streaming buffer size (<code>0x00</code> on Wii).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x000A</code></td>
+                        <td>14</td>
+                        <td><code>u8[14]</code></td>
+                        <td><code>Reserved0</code></td>
+                        <td>Zero-filled padding (<code>0x00</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0018</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>WiiMagic</code></td>
+                        <td>Must equal <code>0x5D1C9EA3</code> on valid Wii discs.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x001C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>GcMagic</code></td>
+                        <td>Must equal <code>0x00000000</code> on Wii discs (<code>0xC2339F3D</code> on GameCube).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0020</code></td>
+                        <td>64</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>GameTitle</code></td>
+                        <td>Null-terminated ASCII disc title string.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0060</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>DisableHashVerify</code></td>
+                        <td><code>0x00</code> = hash verification active (retail); non-zero = disabled (development discs).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0061</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>DisableEncryption</code></td>
+                        <td><code>0x00</code> = partitions AES-encrypted (retail); non-zero = plaintext (development discs).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0062</code></td>
+                        <td>158</td>
+                        <td><code>u8[158]</code></td>
+                        <td><code>Padding</code></td>
+                        <td>Zero-filled padding up to <code>0x0100</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Partition directory and region header" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.2 — Partition Directory (0x40000) &amp; Region Block (0x4E000–0x4FFFF)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x40000</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Table0Count</code></td>
+                        <td>Number of partition entries in Partition Table 0.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x40004</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Table0OffsetShifted</code></td>
+                        <td>Byte offset of Partition Table 0 divided by 4 (typically <code>0x10008</code> &rarr; <code>0x40020</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x40008</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Table1Count</code></td>
+                        <td>Number of partition entries in Partition Table 1.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x4000C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Table1OffsetShifted</code></td>
+                        <td>Byte offset of Partition Table 1 divided by 4.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x40010</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Table2Count</code></td>
+                        <td>Number of partition entries in Partition Table 2.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x40014</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Table2OffsetShifted</code></td>
+                        <td>Byte offset of Partition Table 2 divided by 4.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x40018</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Table3Count</code></td>
+                        <td>Number of partition entries in Partition Table 3.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x4001C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Table3OffsetShifted</code></td>
+                        <td>Byte offset of Partition Table 3 divided by 4.</td>
+                    </tr>
+                    <tr>
+                        <td><code>TableOff + i*8 + 0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>PartOffsetShifted</code></td>
+                        <td>Partition start offset on disc divided by 4 (<code>PartOffset = val &lt;&lt; 2</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>TableOff + i*8 + 0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>PartType</code></td>
+                        <td>Partition type (<code>0</code> = Data, <code>1</code> = Update, <code>2</code> = Channel, or ASCII channel ID).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x4E000</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>RegionSetting</code></td>
+                        <td>Disc region enum (<code>0</code>=JP, <code>1</code>=US, <code>2</code>=PAL, <code>4</code>=KR).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x4E004</code></td>
+                        <td>12</td>
+                        <td><code>u8[12]</code></td>
+                        <td><code>RegionReserved</code></td>
+                        <td>Zero-filled padding.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x4E010</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>AgeRatings</code></td>
+                        <td>16 regional parental rating bytes (bit 7 indicates unrated/restricted per region slot).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x4FFFC</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>HeaderEndMagic</code></td>
+                        <td>Retail disc trailer marker <code>0xC3F81A8E</code> at end of unencrypted header area.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Partition header" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.3 — Partition Header (Relative to PartOffset)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td>676</td>
+                        <td><code>Ticket</code></td>
+                        <td><code>PartitionTicket</code></td>
+                        <td>Embedded v0 Ticket (<code>0x2A4</code> bytes) containing encrypted Title Key &amp; Title ID.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02A4</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>TmdSize</code></td>
+                        <td>Byte size of the partition's Title Metadata (TMD).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02A8</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>TmdOffsetShifted</code></td>
+                        <td>TMD offset relative to <code>PartOffset</code>, divided by 4.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02AC</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>CertChainSize</code></td>
+                        <td>Byte size of the RSA/ECDSA Certificate Chain.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02B0</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>CertChainOffsetShifted</code></td>
+                        <td>Certificate Chain offset relative to <code>PartOffset</code>, divided by 4.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02B4</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>H3OffsetShifted</code></td>
+                        <td>Global H3 SHA-1 table offset relative to <code>PartOffset</code>, divided by 4 (table size is <code>0x18000</code> bytes).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02B8</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>DataOffsetShifted</code></td>
+                        <td>Encrypted cluster stream start offset relative to <code>PartOffset</code>, divided by 4 (typically <code>0x8000</code> &rarr; <code>0x20000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02BC</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>DataSizeShifted</code></td>
+                        <td>Encrypted cluster stream byte length divided by 4 (multiple of <code>0x8000</code> bytes).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Ticket v0 structure" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.4 — Signed Ticket (v0, 0x2A4 Bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>SigType</code></td>
+                        <td>Signature algorithm (<code>0x00010001</code> = RSA-2048 SHA-1; <code>0x00010000</code> = RSA-4096; <code>0x00010002</code> = ECDSA).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0004</code></td>
+                        <td>256</td>
+                        <td><code>u8[256]</code></td>
+                        <td><code>Signature</code></td>
+                        <td>RSA-2048 signature over Ticket body (<code>0x140..0x2A3</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0104</code></td>
+                        <td>60</td>
+                        <td><code>u8[60]</code></td>
+                        <td><code>SigPadding</code></td>
+                        <td>Zero padding aligning signature block to <code>0x0140</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0140</code></td>
+                        <td>64</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>Issuer</code></td>
+                        <td>Null-terminated signer path (e.g., <code>Root-CA00000001-XS00000003</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0180</code></td>
+                        <td>60</td>
+                        <td><code>u8[60]</code></td>
+                        <td><code>EcdhData</code></td>
+                        <td>ECDH key exchange / personalized ticket data (zeros on disc tickets).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01BC</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>TicketVersion</code></td>
+                        <td>Ticket format version (<code>0x00</code> for Wii v0).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01BD</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>Reserved1</code></td>
+                        <td>Reserved bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01BF</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>EncryptedTitleKey</code></td>
+                        <td>AES-128-CBC encrypted 128-bit Title Key.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01CF</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>Unknown1</code></td>
+                        <td>Reserved / unknown byte.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01D0</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>TicketId</code></td>
+                        <td>Unique Ticket ID (<code>0</code> or console-assigned for personalized eShop tickets).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01D8</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>ConsoleId</code></td>
+                        <td>Target Wii NG device ID (<code>0x00000000</code> for universal/disc tickets).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01DC</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>TitleId</code></td>
+                        <td>64-bit Title ID; also forms upper 8 bytes of Title Key decryption IV.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E4</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>Unknown2</code></td>
+                        <td>Typically <code>0xFFFF</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E6</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>TicketTitleVer</code></td>
+                        <td>Ticket version counter.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E8</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>PermittedTitlesMask</code></td>
+                        <td>Permitted titles bitmask.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01EC</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>PermitMask</code></td>
+                        <td>Permit mask paired with <code>PermittedTitlesMask</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01F0</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>TitleExportAllowed</code></td>
+                        <td>Whether title may be exported to SD (<code>0</code>/<code>1</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01F1</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>CommonKeyIndex</code></td>
+                        <td>Key slot selector (<code>0x00</code> = Standard Wii Common Key; <code>0x01</code> = Korean Common Key).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01F2</code></td>
+                        <td>48</td>
+                        <td><code>u8[48]</code></td>
+                        <td><code>Reserved2</code></td>
+                        <td>Reserved / unverified licensing fields.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0222</code></td>
+                        <td>64</td>
+                        <td><code>u8[64]</code></td>
+                        <td><code>ContentAccessMask</code></td>
+                        <td>512-bit content access permission bitmask (1 bit per content index).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0262</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>Padding2</code></td>
+                        <td>Zero padding.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0264</code></td>
+                        <td>64</td>
+                        <td><code>TimeLimit[8]</code></td>
+                        <td><code>Limits</code></td>
+                        <td>8 entries of <code>{ u32be EnableFlag, u32be SecondsLimit }</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="TMD and Content records" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.5 — Title Metadata (TMD v0) &amp; Content Records</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>SigType</code></td>
+                        <td>Signature type (<code>0x00010001</code> = RSA-2048 SHA-1).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0004</code></td>
+                        <td>256</td>
+                        <td><code>u8[256]</code></td>
+                        <td><code>Signature</code></td>
+                        <td>RSA-2048 signature over TMD body (<code>0x140..end</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0104</code></td>
+                        <td>60</td>
+                        <td><code>u8[60]</code></td>
+                        <td><code>SigPadding</code></td>
+                        <td>Zero padding aligning body to <code>0x0140</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0140</code></td>
+                        <td>64</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>Issuer</code></td>
+                        <td>Null-terminated signer path (e.g., <code>Root-CA00000001-CP00000004</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0180</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>TmdVersion</code></td>
+                        <td>Format version (<code>0x00</code> for Wii v0).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0181</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>CaCrlVersion</code></td>
+                        <td>Required Root CA CRL version.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0182</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>SignerCrlVersion</code></td>
+                        <td>Required CP signer CRL version.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0183</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>IsVwii</code></td>
+                        <td><code>0x00</code> on standard Wii; <code>0x01</code> for vWii mode.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0184</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>SystemVersion</code></td>
+                        <td>Required IOS Title ID (e.g., <code>0x0000000100000024</code> for IOS36).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x018C</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>TitleId</code></td>
+                        <td>64-bit Title ID matching the Ticket.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0194</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>TitleType</code></td>
+                        <td>Title classification flags.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0198</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>GroupId</code></td>
+                        <td>Two-byte ASCII Maker Code.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x019A</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>ZeroPad</code></td>
+                        <td>Reserved zero bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x019C</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>Region</code></td>
+                        <td>Region code (<code>0</code>=JP, <code>1</code>=US, <code>2</code>=PAL, <code>3</code>=Region-Free, <code>4</code>=KR).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x019E</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>Ratings</code></td>
+                        <td>Regional parental control rating bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01AE</code></td>
+                        <td>12</td>
+                        <td><code>u8[12]</code></td>
+                        <td><code>Reserved1</code></td>
+                        <td>Reserved (zero).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01BA</code></td>
+                        <td>12</td>
+                        <td><code>u8[12]</code></td>
+                        <td><code>IpcMask</code></td>
+                        <td>IOS IPC access permission mask (partially documented).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01C6</code></td>
+                        <td>18</td>
+                        <td><code>u8[18]</code></td>
+                        <td><code>Reserved2</code></td>
+                        <td>Reserved (zero).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01D8</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>AccessRights</code></td>
+                        <td>Bit 0 (<code>0x1</code>) = AHBPROT hardware access; Bit 1 (<code>0x2</code>) = DVD-Video access.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01DC</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>TitleVersion</code></td>
+                        <td>Title revision number (e.g., v256 = <code>1.0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01DE</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>NumContents</code></td>
+                        <td>Count of 36-byte Content Records following at <code>0x01E4</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E0</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>BootIndex</code></td>
+                        <td>Index into Content Records for the boot content.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E2</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>MinorVersion</code></td>
+                        <td>Minor version / padding (typically <code>0x0000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E4 + i*0x24 + 0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>ContentId</code></td>
+                        <td>Unique 32-bit Content ID (<code>CID</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E4 + i*0x24 + 0x04</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>ContentIndex</code></td>
+                        <td>Sequential index (<code>0</code>..<code>NumContents-1</code>); forms content decryption IV.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E4 + i*0x24 + 0x06</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>ContentType</code></td>
+                        <td><code>0x0001</code> = Normal, <code>0x4001</code> = DLC, <code>0x8001</code> = Shared NAND content.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E4 + i*0x24 + 0x08</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>ContentSize</code></td>
+                        <td>Unpadded content payload size in bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01E4 + i*0x24 + 0x10</code></td>
+                        <td>20</td>
+                        <td><code>u8[20]</code></td>
+                        <td><code>ContentSha1</code></td>
+                        <td>SHA-1 digest of decrypted content (on disc partitions, Content 0 is the H3 table!).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Certificate chain record" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.6 — Certificate Chain Entry (Variable Size by SigType / KeyType)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>SigType</code></td>
+                        <td><code>0x00010000</code> (RSA-4096, 512B sig + 60B pad), <code>0x00010001</code> (RSA-2048, 256B sig + 60B pad), or <code>0x00010002</code> (ECDSA, 60B sig + 4B pad).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0004</code></td>
+                        <td>S<sub>sig</sub></td>
+                        <td><code>u8[S_sig]</code></td>
+                        <td><code>SignatureAndPad</code></td>
+                        <td>Signature plus zero padding to 64-byte alignment (<code>0x23C</code>, <code>0x13C</code>, or <code>0x40</code> bytes).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Body + 0x00</code></td>
+                        <td>64</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>Issuer</code></td>
+                        <td>Null-terminated issuer name (e.g., <code>Root</code> or <code>Root-CA00000001</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Body + 0x40</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>KeyType</code></td>
+                        <td>Subject public key type (<code>0</code> = RSA-4096, <code>1</code> = RSA-2048, <code>2</code> = ECDSA).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Body + 0x44</code></td>
+                        <td>64</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>CertName</code></td>
+                        <td>Null-terminated subject name (e.g., <code>CA00000001</code>, <code>XS00000003</code>, <code>CP00000004</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Body + 0x84</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>KeyId</code></td>
+                        <td>Key identifier / timestamp field.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Body + 0x88</code></td>
+                        <td>S<sub>key</sub></td>
+                        <td><code>u8[S_key]</code></td>
+                        <td><code>PublicKeyAndPad</code></td>
+                        <td>RSA-4096 (512B mod + 4B exp + 52B pad), RSA-2048 (256B mod + 4B exp + 52B pad), or ECC-B233 public key (60B + 60B pad).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Cluster layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.7 — Encrypted 0x8000-Byte Partition Cluster Layout</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td>620</td>
+                        <td><code>u8[31][20]</code></td>
+                        <td><code>H0</code></td>
+                        <td>31 SHA-1 hashes, one per <code>0x400</code>-byte sub-block of the <code>0x7C00</code>-byte decrypted payload.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x026C</code></td>
+                        <td>20</td>
+                        <td><code>u8[20]</code></td>
+                        <td><code>PadH0</code></td>
+                        <td>Zero padding after H0 array.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0280</code></td>
+                        <td>160</td>
+                        <td><code>u8[8][20]</code></td>
+                        <td><code>H1</code></td>
+                        <td>8 SHA-1 hashes covering <code>H0</code> (<code>0x000..0x26B</code>, 620 bytes) of each cluster in the 8-cluster subgroup.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0320</code></td>
+                        <td>32</td>
+                        <td><code>u8[32]</code></td>
+                        <td><code>PadH1</code></td>
+                        <td>Zero padding after H1 array.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0340</code></td>
+                        <td>160</td>
+                        <td><code>u8[8][20]</code></td>
+                        <td><code>H2</code></td>
+                        <td>8 SHA-1 hashes covering <code>H1</code> (<code>0x280..0x31F</code>, 160 bytes) of each 8-cluster subgroup in the 64-cluster group.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x03E0</code></td>
+                        <td>32</td>
+                        <td><code>u8[32]</code></td>
+                        <td><code>PadH2</code></td>
+                        <td>Zero padding after H2 array (note: payload decryption IV comes from <code>ClusterCipher[0x03D0..0x03DF]</code> at the end of the encrypted <code>H2</code> field, not from <code>PadH2</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0400</code></td>
+                        <td>31,744</td>
+                        <td><code>u8[0x7C00]</code></td>
+                        <td><code>PayloadData</code></td>
+                        <td>31 × <code>0x400</code>-byte data sub-blocks encrypted with AES-128-CBC.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>3.1 Wii Magic vs. GameCube Magic</h3>
+        <ul>
+            <li><strong>Wii Optical Disc:</strong> <code>u32be(0x0018) == 0x5D1C9EA3</code> and <code>u32be(0x001C) == 0x00000000</code>.</li>
+            <li><strong>GameCube Optical Disc:</strong> <code>u32be(0x0018) == 0x00000000</code> and <code>u32be(0x001C) == 0xC2339F3D</code>.</li>
+        </ul>
+
+        <h3>3.2 AES-128-CBC Title Key &amp; Cluster IV Derivation</h3>
+        <ol>
+            <li><strong>Select Common Key:</strong> Inspect Ticket byte <code>0x01F1</code> (<code>CommonKeyIndex</code>). Index <code>0x00</code> selects the standard Wii Common Key; index <code>0x01</code> selects the Korean Common Key. (vWii introduces index <code>0x02</code>.)</li>
+            <li><strong>Decrypt Title Key:</strong>
+                <ul>
+                    <li>Ciphertext: 16 bytes at <code>Ticket[0x01BF..0x01CE]</code>.</li>
+                    <li>IV: <code>Ticket[0x01DC..0x01E3] || 0x00[8]</code> (8-byte big-endian Title ID followed by 8 zero bytes).</li>
+                    <li><code>TitleKey = AES_128_CBC_Decrypt(CommonKey[Index], IV_title, EncryptedTitleKey)</code>.</li>
+                </ul>
+            </li>
+            <li><strong>Decrypt Cluster Hash Block (<code>0x0000..0x03FF</code>):</strong>
+                <ul>
+                    <li><code>HashBlockPlain = AES_128_CBC_Decrypt(TitleKey, 0x00[16], ClusterCipher[0x0000..0x03FF])</code>.</li>
+                </ul>
+            </li>
+            <li><strong>Decrypt Cluster Payload (<code>0x0400..0x7FFF</code>):</strong>
+                <ul>
+                    <li>Rather than chaining from the end of the <code>0x400</code>-byte hash block (<code>0x03F0..0x03FF</code>), Wii hardware and IOS explicitly supply the final 16 bytes of the encrypted <code>H2</code> array as the payload IV: <code>IV_payload = ClusterCipher[0x03D0..0x03DF]</code>.</li>
+                    <li><code>PayloadPlain = AES_128_CBC_Decrypt(TitleKey, IV_payload, ClusterCipher[0x0400..0x7FFF])</code>.</li>
+                </ul>
+            </li>
+        </ol>
+
+        <h3>3.3 H0 / H1 / H2 / H3 SHA-1 Verification Tree</h3>
+        <p>Every cluster index <code>c</code> (<code>0</code>-based within the partition's encrypted data stream) maps to virtual decrypted byte range <code>[c * 0x7C00, (c + 1) * 0x7C00)</code>:</p>
+        <ul>
+            <li><strong>H0 (Sub-block level):</strong> For <code>k = 0..30</code>, <code>SHA1(PayloadPlain[k*0x400 : (k+1)*0x400]) == H0[k]</code>.</li>
+            <li><strong>H1 (8-cluster subgroup level):</strong> Let <code>sub = c &amp; 7</code>. <code>SHA1(HashBlockPlain[0x000..0x26B])</code> (all 620 bytes of H0) must equal <code>H1[sub]</code>.</li>
+            <li><strong>H2 (64-cluster group level):</strong> Let <code>grp = (c &gt;&gt; 3) &amp; 7</code>. <code>SHA1(HashBlockPlain[0x280..0x31F])</code> (all 160 bytes of H1) must equal <code>H2[grp]</code>.</li>
+            <li><strong>H3 (Partition global table):</strong> Let <code>h3Idx = c &gt;&gt; 6</code>. <code>SHA1(HashBlockPlain[0x340..0x3DF])</code> (all 160 bytes of H2) must equal <code>H3Table[h3Idx * 20 : (h3Idx + 1) * 20]</code>.</li>
+            <li><strong>Root Anchor:</strong> <code>SHA1(H3Table[0 .. TMD.Content[0].ContentSize])</code> must equal <code>TMD.Content[0].ContentSha1</code>, and TMD/Ticket signatures chain to the Wii Root CA via the partition's Certificate Chain.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Partition Types:</strong> Disc partition tables classify partitions by <code>PartType</code>: <code>0</code> = <strong>Data</strong> (main executable title), <code>1</code> = <strong>Update</strong> (system IOS &amp; System Menu WADs under <code>_sys/</code>), and <code>2</code> = <strong>Channel</strong> (or a 4-byte ASCII Title ID for embedded installable channels). A parser should walk all non-empty tables <code>0..3</code> and distinguish partitions by both type and table index.</li>
+            <li><strong><code>0x7C00</code> Payload vs. <code>0x400</code> Hash Block Stride:</strong> Physical cluster stride on disc is <code>0x8000</code> (32,768 bytes), whereas decrypted logical stride is <code>0x7C00</code> (31,744 bytes). Converting a decrypted virtual partition offset <code>voff</code> to physical disc offset requires integer division:
+                <code>cluster = voff / 0x7C00</code>, <code>intra = voff % 0x7C00</code>, <code>discOff = PartOffset + DataOffset + cluster * 0x8000 + 0x0400 + intra</code>.
+            </li>
+            <li><strong>Unencrypted Development Discs:</strong> If disc header byte <code>0x0061</code> (<code>DisableEncryption</code>) is non-zero, partition clusters are stored without AES encryption or without the <code>0x400</code> hash header depending on disc master configuration; verify <code>0x0060</code> and <code>0x0061</code> before assuming retail cluster framing.</li>
+            <li><strong>Inner Decrypted Partition FST Shifted Offsets:</strong> Inside the decrypted partition stream at <code>0x0420–0x042F</code>, DOL offset, FST offset, and FST size are stored as <code>u32be</code> shifted right by 2 bits (<code>val &lt;&lt; 2</code>). Inside the FST itself, file offsets are also stored as <code>u32be</code> shifted right by 2 bits (unlike GameCube FST byte offsets), enabling files beyond 4 GiB.</li>
+            <li><strong>Generalized Boot Rule:</strong> On partition boot, IOS loads the TMD's <code>SystemVersion</code> IOS slot, mounts the partition via <code>/dev/di</code>, executes the apploader at decrypted offset <code>0x02440</code>, maps the main <code>.dol</code> into MEM1/MEM2, and transfers control to its entry point.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function parse_wii_disc(disc_stream, common_keys):
+    hdr = read_bytes(disc_stream, 0x00000, 0x100)
+    assert u32be(hdr, 0x18) == 0x5D1C9EA3
+    assert u32be(hdr, 0x1C) == 0x00000000
+    is_encrypted = (hdr[0x61] == 0x00)
+    verify_hashes = (hdr[0x60] == 0x00)
+
+    part_dir = read_bytes(disc_stream, 0x40000, 0x20)
+    partitions = []
+    for t in 0..3:
+        count = u32be(part_dir, t * 8)
+        table_off = u32be(part_dir, t * 8 + 4) &lt;&lt; 2
+        if count == 0 or table_off == 0:
+            continue
+        entries = read_bytes(disc_stream, table_off, count * 8)
+        for i in 0..(count - 1):
+            p_off = u32be(entries, i * 8) &lt;&lt; 2
+            p_type = u32be(entries, i * 8 + 4)
+            partitions.append({ table: t, type: p_type, offset: p_off })
+
+    for part in partitions:
+        phdr = read_bytes(disc_stream, part.offset, 0x2C0)
+        ticket = phdr[0x000 : 0x2A4]
+        tmd_size = u32be(phdr, 0x2A4)
+        tmd_off  = part.offset + (u32be(phdr, 0x2A8) &lt;&lt; 2)
+        h3_off   = part.offset + (u32be(phdr, 0x2B4) &lt;&lt; 2)
+        data_off = part.offset + (u32be(phdr, 0x2B8) &lt;&lt; 2)
+        data_len = u32be(phdr, 0x2BC) &lt;&lt; 2
+
+        tmd = read_bytes(disc_stream, tmd_off, tmd_size)
+        h3_table = read_bytes(disc_stream, h3_off, 0x18000)
+        if verify_hashes:
+            assert sha1(h3_table) == tmd[0x1E4 + 0x10 : 0x1E4 + 0x24]
+
+        key_idx = ticket[0x1F1]
+        iv_title = ticket[0x1DC : 0x1E4] + bytes(8 zero bytes)
+        title_key = aes128_cbc_decrypt(common_keys[key_idx], iv_title, ticket[0x1BF : 0x1CF])
+
+        part.read_virtual = function(voff, length):
+            out = empty_buffer()
+            while length &gt; 0:
+                cluster_idx = voff // 0x7C00
+                intra = voff % 0x7C00
+                take = min(length, 0x7C00 - intra)
+                c_raw = read_bytes(disc_stream, data_off + cluster_idx * 0x8000, 0x8000)
+
+                if is_encrypted:
+                    h_plain = aes128_cbc_decrypt(title_key, bytes(16 zero bytes), c_raw[0x0000 : 0x0400])
+                    d_plain = aes128_cbc_decrypt(title_key, c_raw[0x03D0 : 0x03E0], c_raw[0x0400 : 0x8000])
+                else:
+                    h_plain = c_raw[0x0000 : 0x0400]
+                    d_plain = c_raw[0x0400 : 0x8000]
+
+                if verify_hashes:
+                    for k in 0..30:
+                        assert sha1(d_plain[k*0x400 : (k+1)*0x400]) == h_plain[k*20 : (k+1)*20]
+                    assert sha1(h_plain[0x000 : 0x26C]) == h_plain[0x280 + (cluster_idx &amp; 7)*20 : ... + 20]
+                    assert sha1(h_plain[0x280 : 0x320]) == h_plain[0x340 + ((cluster_idx &gt;&gt; 3) &amp; 7)*20 : ... + 20]
+                    assert sha1(h_plain[0x340 : 0x3E0]) == h3_table[(cluster_idx &gt;&gt; 6)*20 : ... + 20]
+
+                out.append(d_plain[intra : intra + take])
+                voff += take
+                length -= take
+            return out</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn" role="note">
+            <strong>Cryptographic &amp; Legal Boundary:</strong> This specification intentionally omits retail AES-128 common keys, RSA root public moduli, and signing keys. Parsers must accept external user-supplied key material at runtime rather than embedding proprietary keys.
+        </aside>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> Disc header magic (<code>0x5D1C9EA3</code>), <code>0x40000</code> partition table structure, v0 Ticket/TMD layouts, Certificate Chain key encodings, <code>0x8000</code>-byte cluster framing (<code>0x400</code> hash block + <code>0x7C00</code> payload), H0–H3 SHA-1 verification tree, and shifted inner FST/DOL pointers are confirmed across retail Wii optical media and IOS <code>/dev/di</code> behavior.</li>
+            <li><strong>Reserved / Partially Documented Fields:</strong> Ticket bytes <code>0x1F2–0x221</code> and TMD bytes <code>0x1AE–0x1D7</code> (beyond confirmed IPC mask subsets) contain internal licensing/access flags whose full bit-level semantics depend on specific IOS revisions.</li>
+        </ul>
+    </section>
+</body>
+</html>

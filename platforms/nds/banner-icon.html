@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nintendo DS Icon &amp; Localized Title Banner — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#nds" target="_top">Nintendo DS</a><span>/</span><span>Icon &amp; Title Banner</span>
+    </nav>
+
+    <h1>Nintendo DS Icon &amp; Localized Title Banner</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Platform Binary Specification · Firmware UI Metadata</p>
+        <p>The Nintendo DS Banner structure stores the 32×32 4bpp tiled application icon, 16-color BGR555 palette, and localized multi-line UTF-16LE game titles displayed by the system launcher. Later revisions expand language coverage (Chinese and Korean) and add DSi (TWL) 8-frame animated icon support.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd>Embedded at ROM header offset <code>0x0068</code> (<code>banner_offset</code>); standalone SDK artifact <code>banner.bin</code></dd>
+            <dt>Magic Bytes</dt>
+            <dd>Version word at <code>0x0000</code>: <code>0x0001</code>, <code>0x0002</code>, <code>0x0003</code>, or <code>0x0103</code> (<code>u16le</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (<code>u16le</code> header, palette, UTF-16LE strings, and animation tokens)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo DS (NTR) System Menu (<code>0x0001–0x0003</code>) &amp; Nintendo DSi (TWL) Launcher (<code>0x0103</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Launcher icon sprite &amp; localized title block</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">Identification &amp; Scope</a></li>
+            <li><a href="#layout">Binary Layout Tables</a></li>
+            <li><a href="#flags">Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">Parser Pseudocode</a></li>
+            <li><a href="#provenance">Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>The banner starts at the ROM offset recorded at header offset <code>0x0068</code> (<code>banner_offset</code>). If <code>banner_offset == 0</code>, the cartridge provides no icon or title block. A valid banner is identified by its <code>u16le</code> <code>version</code> field at <code>0x0000</code> and verified against one or more CRC-16/MODBUS checksums at <code>0x0002–0x0008</code>.</p>
+        <ul>
+            <li><strong><code>0x0001</code> (<code>0x0840</code> / 2,112 bytes):</strong> Standard NDS banner with 6 titles (Japanese, English, French, German, Italian, Spanish).</li>
+            <li><strong><code>0x0002</code> (<code>0x0940</code> / 2,368 bytes):</strong> Adds Chinese title slot and <code>crc16_v2</code>.</li>
+            <li><strong><code>0x0003</code> (<code>0x0A40</code> / 2,624 bytes):</strong> Adds Korean title slot and <code>crc16_v3</code>.</li>
+            <li><strong><code>0x0103</code> (<code>0x23C0</code> / 9,152 bytes):</strong> DSi animated banner adding 8 icon bitmaps, 8 palettes, a 64-step animation sequence, and <code>crc16_dsi</code>.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Banner Header &amp; Core NTR Payload (0x0000–0x0A3F)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x0000</td><td>2</td><td>u16le</td><td>version</td><td>Banner format version (<code>0x0001</code>, <code>0x0002</code>, <code>0x0003</code>, or <code>0x0103</code>).</td></tr>
+                    <tr><td>0x0002</td><td>2</td><td>u16le</td><td>crc16_v1</td><td>CRC-16/MODBUS over <code>0x0020–0x083F</code> (<code>0x0820</code> bytes).</td></tr>
+                    <tr><td>0x0004</td><td>2</td><td>u16le</td><td>crc16_v2</td><td>CRC-16/MODBUS over <code>0x0020–0x093F</code> (<code>0x0920</code> bytes) if <code>version &gt;= 0x0002</code>; else <code>0</code>.</td></tr>
+                    <tr><td>0x0006</td><td>2</td><td>u16le</td><td>crc16_v3</td><td>CRC-16/MODBUS over <code>0x0020–0x0A3F</code> (<code>0x0A20</code> bytes) if <code>version &gt;= 0x0003</code>; else <code>0</code>.</td></tr>
+                    <tr><td>0x0008</td><td>2</td><td>u16le</td><td>crc16_dsi</td><td>CRC-16/MODBUS over <code>0x1240–0x23BF</code> (<code>0x1180</code> bytes) if <code>version == 0x0103</code>; else <code>0</code>.</td></tr>
+                    <tr><td>0x000A</td><td>22</td><td>u8[22]</td><td>reserved_hdr</td><td>Reserved, zero-filled.</td></tr>
+                    <tr><td>0x0020</td><td>512</td><td>u8[512]</td><td>icon_bitmap</td><td>32×32 static icon, 4bpp tiled (16 tiles of 8×8 pixels, 32 bytes/tile).</td></tr>
+                    <tr><td>0x0220</td><td>32</td><td>u16le[16]</td><td>icon_palette</td><td>16-entry BGR555 palette (index <code>0</code> is transparent).</td></tr>
+                    <tr><td>0x0240</td><td>256</td><td>u16le[128]</td><td>title_ja</td><td>Japanese title (UTF-16LE, null-padded).</td></tr>
+                    <tr><td>0x0340</td><td>256</td><td>u16le[128]</td><td>title_en</td><td>English title (UTF-16LE, null-padded).</td></tr>
+                    <tr><td>0x0440</td><td>256</td><td>u16le[128]</td><td>title_fr</td><td>French title (UTF-16LE, null-padded).</td></tr>
+                    <tr><td>0x0540</td><td>256</td><td>u16le[128]</td><td>title_de</td><td>German title (UTF-16LE, null-padded).</td></tr>
+                    <tr><td>0x0640</td><td>256</td><td>u16le[128]</td><td>title_it</td><td>Italian title (UTF-16LE, null-padded).</td></tr>
+                    <tr><td>0x0740</td><td>256</td><td>u16le[128]</td><td>title_es</td><td>Spanish title (UTF-16LE, null-padded).</td></tr>
+                    <tr><td>0x0840</td><td>256</td><td>u16le[128]</td><td>title_zh</td><td>Chinese title (present when <code>version &gt;= 0x0002</code>).</td></tr>
+                    <tr><td>0x0940</td><td>256</td><td>u16le[128]</td><td>title_ko</td><td>Korean title (present when <code>version &gt;= 0x0003</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>DSi Animated Icon Extension (0x0A40–0x23BF, version 0x0103 only)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x0A40</td><td>2048</td><td>u8[2048]</td><td>reserved_titles</td><td>Reserved space for 8 additional 256-byte title slots (zero-filled).</td></tr>
+                    <tr><td>0x1240</td><td>4096</td><td>u8[8][512]</td><td>dsi_icon_frames</td><td>8 animated icon bitmaps, each 32×32 4bpp tiled (512 bytes per frame).</td></tr>
+                    <tr><td>0x2240</td><td>256</td><td>u16le[8][16]</td><td>dsi_icon_palettes</td><td>8 BGR555 palettes (16 colors × 2 bytes per palette).</td></tr>
+                    <tr><td>0x2340</td><td>128</td><td>u16le[64]</td><td>dsi_anim_sequence</td><td>64 animation step tokens controlling frame, palette, flip, and duration.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>4bpp Tiled Icon Pixel Decoding</h3>
+        <p>Each 32×32 icon (512 bytes) is partitioned into a 4×4 grid of 8×8-pixel tiles stored in row-major tile order (<code>ty = 0..3</code>, <code>tx = 0..3</code>):</p>
+        <pre><code>tile_index  = ty * 4 + tx
+tile_offset = tile_index * 32
+for py in 0..7:
+    for px in 0..7:
+        byte_val  = bitmap[tile_offset + py * 4 + (px &gt;&gt; 1)]
+        color_idx = (byte_val &amp; 0x0F) if (px &amp; 1) == 0 else (byte_val &gt;&gt; 4)
+        pixel_x   = tx * 8 + px
+        pixel_y   = ty * 8 + py</code></pre>
+
+        <h3>BGR555 Palette Decoding</h3>
+        <p>Color index <code>0</code> is always fully transparent (<code>RGBA = (0, 0, 0, 0)</code>) regardless of the value stored in <code>palette[0]</code>. Indices <code>1..15</code> decode from 15-bit BGR555:</p>
+        <pre><code>c  = palette[color_idx]
+r5 =  c        &amp; 0x1F
+g5 = (c &gt;&gt;  5) &amp; 0x1F
+b5 = (c &gt;&gt; 10) &amp; 0x1F
+r8 = (r5 &lt;&lt; 3) | (r5 &gt;&gt; 2)
+g8 = (g5 &lt;&lt; 3) | (g5 &gt;&gt; 2)
+b8 = (b5 &lt;&lt; 3) | (b5 &gt;&gt; 2)
+alpha = 255</code></pre>
+
+        <h3>DSi Animation Sequence Token (<code>u16le</code> at <code>0x2340</code>)</h3>
+        <ul>
+            <li><strong>Bits 0–7 (<code>token &amp; 0x00FF</code>):</strong> Frame duration in 60 Hz display frames (<code>0x00</code> terminates/loops the sequence).</li>
+            <li><strong>Bits 8–10 (<code>(token &gt;&gt; 8) &amp; 0x07</code>):</strong> Bitmap frame index (<code>0..7</code> in <code>dsi_icon_frames</code>).</li>
+            <li><strong>Bits 11–13 (<code>(token &gt;&gt; 11) &amp; 0x07</code>):</strong> Palette index (<code>0..7</code> in <code>dsi_icon_palettes</code>).</li>
+            <li><strong>Bit 14 (<code>(token &gt;&gt; 14) &amp; 0x01</code>):</strong> Horizontal flip flag.</li>
+            <li><strong>Bit 15 (<code>(token &gt;&gt; 15) &amp; 0x01</code>):</strong> Vertical flip flag.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Multi-Line Titles:</strong> Each 256-byte title slot holds up to 128 UTF-16LE code units, terminated by <code>0x0000</code> and padded with zeroes. Line breaks (typically 2 or 3 lines for title and publisher/subtitle) use LF (<code>0x000A</code>).</li>
+            <li><strong>Incremental CRC Validation:</strong> A <code>version = 0x0103</code> banner MUST satisfy all four CRCs (<code>crc16_v1</code>, <code>crc16_v2</code>, <code>crc16_v3</code>, and <code>crc16_dsi</code>) so backward-compatible NTR consoles can validate <code>crc16_v1</code> and display the static icon at <code>0x0020</code>.</li>
+            <li><strong>Missing Language Fallback:</strong> Unused language slots are commonly filled identically to the primary English or Japanese title, or left zero-filled; parsers should fall back to English (<code>title_en</code>) or the first non-empty title slot.</li>
+            <li><strong>ROM Alignment:</strong> Banners are typically padded or aligned at <code>0x200</code>-byte boundaries in ROM, though <code>banner_offset</code> specifies the exact start byte.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Parser Pseudocode</h2>
+        <pre><code>function parse_nds_banner(rom_bytes, banner_offset):
+    assert banner_offset != 0 and banner_offset + 0x0840 &lt;= len(rom_bytes)
+    b = rom_bytes[banner_offset :]
+    version = read_u16le(b, 0x0000)
+
+    required_size = {
+        0x0001: 0x0840,
+        0x0002: 0x0940,
+        0x0003: 0x0A40,
+        0x0103: 0x23C0,
+    }[version]
+    assert len(b) &gt;= required_size
+
+    # Verify version-appropriate CRCs (CRC-16/MODBUS)
+    assert crc16_modbus(b[0x0020 : 0x0840]) == read_u16le(b, 0x0002)
+    if version &gt;= 0x0002:
+        assert crc16_modbus(b[0x0020 : 0x0940]) == read_u16le(b, 0x0004)
+    if version &gt;= 0x0003:
+        assert crc16_modbus(b[0x0020 : 0x0A40]) == read_u16le(b, 0x0006)
+    if version == 0x0103:
+        assert crc16_modbus(b[0x1240 : 0x23C0]) == read_u16le(b, 0x0008)
+
+    function decode_icon(bitmap_512, pal_32):
+        pal = [read_u16le(pal_32, i * 2) for i in range(16)]
+        rgba = allocate_rgba(32, 32)
+        for ty in range(4):
+            for tx in range(4):
+                tile_off = (ty * 4 + tx) * 32
+                for py in range(8):
+                    for px in range(8):
+                        byte_val = bitmap_512[tile_off + py * 4 + (px &gt;&gt; 1)]
+                        idx = (byte_val &amp; 0x0F) if (px &amp; 1) == 0 else (byte_val &gt;&gt; 4)
+                        if idx == 0:
+                            rgba[ty * 8 + py][tx * 8 + px] = (0, 0, 0, 0)
+                        else:
+                            c = pal[idx]
+                            r = ((c &amp; 0x1F) &lt;&lt; 3) | ((c &amp; 0x1F) &gt;&gt; 2)
+                            g = (((c &gt;&gt; 5) &amp; 0x1F) &lt;&lt; 3) | (((c &gt;&gt; 5) &amp; 0x1F) &gt;&gt; 2)
+                            bl = (((c &gt;&gt; 10) &amp; 0x1F) &lt;&lt; 3) | (((c &gt;&gt; 10) &amp; 0x1F) &gt;&gt; 2)
+                            rgba[ty * 8 + py][tx * 8 + px] = (r, g, bl, 255)
+        return rgba
+
+    static_icon = decode_icon(b[0x0020 : 0x0220], b[0x0220 : 0x0240])
+
+    lang_names = ["ja", "en", "fr", "de", "it", "es"]
+    if version &gt;= 0x0002: lang_names.append("zh")
+    if version &gt;= 0x0003: lang_names.append("ko")
+
+    titles = {}
+    for idx, lang in enumerate(lang_names):
+        raw_str = b[0x0240 + idx * 256 : 0x0240 + (idx + 1) * 256]
+        titles[lang] = decode_utf16le_until_null(raw_str)
+
+    dsi_anim = null
+    if version == 0x0103:
+        frames   = [b[0x1240 + i * 512 : 0x1240 + (i + 1) * 512] for i in range(8)]
+        palettes = [b[0x2240 + i * 32  : 0x2240 + (i + 1) * 32]  for i in range(8)]
+        seq = []
+        for i in range(64):
+            tok = read_u16le(b, 0x2340 + i * 2)
+            dur = tok &amp; 0xFF
+            if dur == 0:
+                break
+            seq.append({
+                duration: dur,
+                frame:    (tok &gt;&gt; 8) &amp; 0x07,
+                palette:  (tok &gt;&gt; 11) &amp; 0x07,
+                flip_x:   (tok &amp; 0x4000) != 0,
+                flip_y:   (tok &amp; 0x8000) != 0,
+            })
+        dsi_anim = { frames: frames, palettes: palettes, sequence: seq }
+
+    return { version: version, static_icon: static_icon, titles: titles, dsi_anim: dsi_anim }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>Banner versions <code>0x0001</code>, <code>0x0002</code>, <code>0x0003</code>, and <code>0x0103</code>, including CRC-16 coverage ranges, 4bpp tile ordering, BGR555 encoding, and UTF-16LE title slots, are <strong>confirmed</strong> across NTR and TWL system firmware behavior.</p>
+        <aside class="callout-warn">
+            <strong>Caveats:</strong> The <code>0x0A40–0x123F</code> gap in <code>0x0103</code> banners is reserved for potential additional languages and is zero-filled on standard releases; it is not covered by <code>crc16_v3</code> or <code>crc16_dsi</code>. Custom homebrew banners occasionally omit valid <code>crc16_v2</code>/<code>crc16_v3</code> checksums or set <code>banner_offset</code> to <code>0</code>.
+        </aside>
+    </section>
+</body>
+</html>

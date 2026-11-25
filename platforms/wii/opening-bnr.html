@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>opening.bnr Banner Container — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#wii" target="_top">Nintendo Wii</a>
+        <span>/</span>
+        <span>opening.bnr Banner Container</span>
+    </nav>
+
+    <h1>Wii opening.bnr (IMET + U8 Archive Container)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">System Menu Banner Package · Route <code>#wii-opening-bnr</code></p>
+        <p>Nintendo Wii's System Menu channel and disc banner container combining a localized, MD5-verified <code>IMET</code> metadata header with a <code>U8</code> (<code>0x55AA382D</code>) archive holding <code>meta/icon.bin</code>, <code>meta/banner.bin</code>, and <code>meta/sound.bin</code>.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>opening.bnr</code> (in disc data partition root) or <code>00000000.app</code> (content 0 of NAND/WAD channels)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>49 4D 45 54</code> (<code>IMET</code>) at <code>0x0040</code> (disc) or <code>0x0080</code> (NAND channel), followed by <code>55 AA 38 2D</code> (U8) at <code>0x0600</code> or <code>0x0640</code></dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian (all offsets, lengths, <code>UTF-16BE</code> channel titles, and embedded <code>IMD5</code>/<code>U8</code>/<code>BNS</code> headers)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo Wii System Menu (Disc Channel &amp; NAND Channel Launcher)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Localized System Menu channel title, animation, icon, and audio banner (<code>application/x-wii-opening-bnr</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>The Wii System Menu displays animated banners and plays background audio for both inserted optical discs (via <code>opening.bnr</code> in the disc partition's root directory) and installed NAND channels (via Content 0, typically <code>00000000.app</code>). Unlike the GameCube's fixed <code>BNR1</code>/<code>BNR2</code> bitmap banner, Wii <code>opening.bnr</code> wraps a localized <code>IMET</code> header around a hierarchical <code>U8</code> archive.</p>
+        <ul>
+            <li><strong>Magic Bytes &amp; Alignment:</strong> On disc <code>opening.bnr</code>, a 64-byte zero block precedes the ASCII magic <code>"IMET"</code> (<code>0x494D4554</code>) at <code>0x0040</code>, and the <code>U8</code> archive (magic <code>0x55AA382D</code>) begins at <code>0x0600</code>. On NAND channel <code>00000000.app</code>, 128 bytes of zero padding precede <code>"IMET"</code> at <code>0x0080</code>, shifting the <code>U8</code> archive start to <code>0x0640</code>.</li>
+            <li><strong>Endianness:</strong> Every numeric field in <code>IMET</code>, <code>U8</code>, <code>IMD5</code>, and child banner assets is <strong>big-endian</strong>; localized title strings use <strong>UTF-16BE</strong>.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="IMET header layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.1 — IMET Metadata Header (0x600 Bytes; Relative to IMET Block Base B &isin; {0x00, 0x40})</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>B + 0x000</code></td>
+                        <td>64</td>
+                        <td><code>u8[64]</code></td>
+                        <td><code>ZeroPrefix</code></td>
+                        <td>64 zero bytes included inside the <code>0x600</code>-byte MD5-hashed IMET block (NAND apps have <code>0x40</code> extra leading zeros before <code>B</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x040</code></td>
+                        <td>4</td>
+                        <td><code>char[4]</code></td>
+                        <td><code>Magic</code></td>
+                        <td><code>"IMET"</code> (<code>0x494D4554</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x044</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>HashLength</code></td>
+                        <td>Size of the hashed IMET block (always <code>0x00000600</code> = 1,536 bytes).</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x048</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Version</code></td>
+                        <td>Header version/unknown field (always <code>0x00000003</code> on retail Wii).</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x04C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>IconSize</code></td>
+                        <td>Declared byte size of <code>meta/icon.bin</code> inside the U8 archive.</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x050</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>BannerSize</code></td>
+                        <td>Declared byte size of <code>meta/banner.bin</code> inside the U8 archive.</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x054</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>SoundSize</code></td>
+                        <td>Declared byte size of <code>meta/sound.bin</code> inside the U8 archive.</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x058</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Flags</code></td>
+                        <td>Banner behavior flags (typically <code>0x00000000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x05C</code></td>
+                        <td>840</td>
+                        <td><code>utf16be[10][42]</code></td>
+                        <td><code>ChannelNames</code></td>
+                        <td>10 localized channel titles, 84 bytes (42 UTF-16BE code units) each (JP, EN, DE, FR, ES, IT, NL, ZH-S, ZH-T, KO).</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x3A4</code></td>
+                        <td>588</td>
+                        <td><code>u8[588]</code></td>
+                        <td><code>ReservedPad</code></td>
+                        <td>Zero-filled padding up to <code>B + 0x5F0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>B + 0x5F0</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>Md5Hash</code></td>
+                        <td>MD5 digest over <code>[B + 0x000 .. B + 0x5FF]</code> with bytes <code>[B + 0x5F0 .. B + 0x5FF]</code> treated as zero.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="U8 archive layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.2 — U8 Archive Header &amp; Node Entries (Starts at B + 0x600)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>U8 + 0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>Tag</code></td>
+                        <td>U8 magic <code>0x55AA382D</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>U8 + 0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>RootNodeOffset</code></td>
+                        <td>Offset from <code>U8</code> start to node 0 (typically <code>0x00000020</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>U8 + 0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>HeaderSize</code></td>
+                        <td>Combined byte size of the Node Table and String Table.</td>
+                    </tr>
+                    <tr>
+                        <td><code>U8 + 0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>DataOffset</code></td>
+                        <td>Offset from <code>U8</code> start to aligned file payloads (typically <code>align32(RootNodeOffset + HeaderSize)</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>U8 + 0x10</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>HeaderPad</code></td>
+                        <td>Zero padding (<code>0x00</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Node + 0x00</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>NodeType</code></td>
+                        <td><code>0x00</code> = regular file; <code>0x01</code> = directory.</td>
+                    </tr>
+                    <tr>
+                        <td><code>Node + 0x01</code></td>
+                        <td>3</td>
+                        <td><code>u24be</code></td>
+                        <td><code>NameOffset</code></td>
+                        <td>24-bit big-endian byte offset into the String Table (<code>U8 + RootNodeOffset + TotalNodes * 12</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Node + 0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>DataOrParent</code></td>
+                        <td>File: offset from <code>U8</code> start to file bytes. Directory: parent node index (<code>0</code> for root).</td>
+                    </tr>
+                    <tr>
+                        <td><code>Node + 0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>SizeOrEndNode</code></td>
+                        <td>File: byte size. Directory: exclusive end node index (<code>root.SizeOrEndNode == TotalNodes</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="IMD5 and child asset headers" tabindex="0">
+            <table class="format-counts">
+                <caption>Table 2.3 — IMD5 Wrapper Header for <code>meta/icon.bin</code>, <code>meta/banner.bin</code>, &amp; <code>meta/sound.bin</code></caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>char[4]</code></td>
+                        <td><code>Magic</code></td>
+                        <td><code>"IMD5"</code> (<code>0x494D4435</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>PayloadSize</code></td>
+                        <td>Byte size of the payload following the 32-byte <code>IMD5</code> header.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>8</td>
+                        <td><code>u8[8]</code></td>
+                        <td><code>Padding</code></td>
+                        <td>Zero padding (<code>0x00</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>PayloadMd5</code></td>
+                        <td>MD5 digest of <code>Payload[0 .. PayloadSize]</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td><code>PayloadSize</code></td>
+                        <td><code>u8[]</code></td>
+                        <td><code>Payload</code></td>
+                        <td>Inner container: raw <code>U8</code> (<code>0x55AA382D</code>), <code>LZ77</code>-compressed <code>U8</code> (<code>0x4C5A3737</code>), or <code>BNS </code>/<code>RIFF</code> audio for <code>sound.bin</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>3.1 IMET MD5 Verification Formula</h3>
+        <ol>
+            <li>Locate the <code>"IMET"</code> signature at <code>0x0040</code> (base <code>B = 0x0000</code>) or <code>0x0080</code> (base <code>B = 0x0040</code>).</li>
+            <li>Copy the <code>0x600</code> bytes spanning <code>[B .. B + 0x5FF]</code> into a mutable buffer.</li>
+            <li>Save the 16-byte stored hash at buffer offset <code>[0x5F0 .. 0x5FF]</code>, then overwrite <code>[0x5F0 .. 0x5FF]</code> with 16 zero bytes (<code>0x00</code>).</li>
+            <li>Verify <code>MD5(buffer[0x000 .. 0x5FF]) == stored_hash</code>.</li>
+        </ol>
+
+        <h3>3.2 U8 Node Recursion Rules</h3>
+        <p>The U8 node array stores a pre-order depth-first traversal of the filesystem starting at root node <code>0</code>:</p>
+        <ul>
+            <li>Read <code>totalNodes = node[0].SizeOrEndNode</code>. The string table starts at <code>U8 + RootNodeOffset + totalNodes * 12</code>.</li>
+            <li>A directory at index <code>idx</code> owns child indices <code>idx + 1 .. node[idx].SizeOrEndNode - 1</code>.</li>
+            <li>Maintain a stack of active directory bounds <code>(dirPath, endNodeIndex)</code>. Before processing node <code>i</code>, pop any directory whose <code>endNodeIndex == i</code>. Read null-terminated <code>name = cstr(stringTable + node[i].NameOffset)</code>; if directory, push <code>(currentPath + "/" + name, node[i].SizeOrEndNode)</code>; if file, emit <code>(currentPath + "/" + name, U8 + node[i].DataOrParent, node[i].SizeOrEndNode)</code>.</li>
+        </ul>
+
+        <h3>3.3 Expected Child Asset Hierarchy</h3>
+        <ul>
+            <li><code>/meta/icon.bin</code> — <code>IMD5</code> &rarr; (optional <code>LZ77</code>) &rarr; <code>U8</code> containing <code>arc/blyt/icon.brlyt</code>, <code>arc/anim/icon.brlan</code>, and <code>arc/timg/*.tpl</code> (channel grid thumbnail).</li>
+            <li><code>/meta/banner.bin</code> — <code>IMD5</code> &rarr; (optional <code>LZ77</code>) &rarr; <code>U8</code> containing <code>arc/blyt/banner.brlyt</code>, <code>arc/anim/banner*.brlan</code>, and <code>arc/timg/*.tpl</code> (full-screen channel preview).</li>
+            <li><code>/meta/sound.bin</code> — <code>IMD5</code> &rarr; (optional <code>LZ77</code>) &rarr; <code>BNS </code> (<code>0x424E5320</code>, Nintendo Wii DSP-ADPCM banner audio) or PCM <code>RIFF</code> WAV.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Disc vs. NAND Channel Offset Shift:</strong> Disc <code>opening.bnr</code> places <code>"IMET"</code> at <code>0x0040</code> (<code>B = 0x0000</code>), whereas NAND channel <code>00000000.app</code> places <code>"IMET"</code> at <code>0x0080</code> (<code>B = 0x0040</code>). Parsers should probe both <code>0x0040</code> and <code>0x0080</code> instead of assuming a single fixed offset.</li>
+            <li><strong>LZ77-Wrapped <code>IMD5</code> Payloads:</strong> When the <code>IMD5</code> payload inside <code>icon.bin</code>, <code>banner.bin</code>, or <code>sound.bin</code> starts with ASCII <code>"LZ77"</code> (<code>0x4C5A3737</code>) followed immediately by compression header byte <code>0x10</code> (or <code>0x11</code>), strip the 4-byte <code>"LZ77"</code> tag and run Nintendo LZ10/LZ11 decompression to recover the inner <code>U8</code> or <code>BNS </code> stream.</li>
+            <li><strong>Uncompressed <code>sound.bin</code> / Missing Optional Assets:</strong> Some minimal channels omit <code>sound.bin</code> (setting <code>SoundSize == 0</code> in <code>IMET</code>) or omit <code>LZ77</code> compression; always inspect the 4-byte magic at <code>IMD5 + 0x20</code> before dispatching to LZ77, U8, or BNS decoders.</li>
+            <li><strong>24-Bit Name Offset Decoding:</strong> Remember that <code>Node.NameOffset</code> is an unsigned 24-bit big-endian integer (<code>(b1 &lt;&lt; 16) | (b2 &lt;&lt; 8) | b3</code>), NOT a 32-bit integer, because byte <code>0x00</code> holds <code>NodeType</code>.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function parse_opening_bnr(data):
+    if data[0x40 : 0x44] == b"IMET":
+        base = 0x0000
+    elif data[0x80 : 0x84] == b"IMET":
+        base = 0x0040
+    else:
+        error("IMET magic not found at 0x40 or 0x80")
+
+    imet_buf = copy(data[base : base + 0x600])
+    stored_md5 = copy(imet_buf[0x5F0 : 0x600])
+    imet_buf[0x5F0 : 0x600] = bytes(16 zero bytes)
+    assert md5(imet_buf) == stored_md5
+
+    titles = []
+    for lang in 0..9:
+        raw_utf16 = imet_buf[0x05C + lang * 84 : 0x05C + (lang + 1) * 84]
+        titles.append(decode_utf16be_until_null(raw_utf16))
+
+    u8_start = base + 0x600
+    files = parse_u8(data[u8_start : len(data)])
+
+    for path, blob in files:
+        if blob[0x00 : 0x04] == b"IMD5":
+            psize = u32be(blob, 0x04)
+            inner = blob[0x20 : 0x20 + psize]
+            assert md5(inner) == blob[0x10 : 0x20]
+            if inner[0x00 : 0x04] == b"LZ77":
+                inner = decompress_nintendo_lz(inner[0x04 : len(inner)])
+            # inner is now U8 (0x55AA382D) or BNS/RIFF
+
+    return { titles, files }
+
+function parse_u8(u8_bytes):
+    assert u32be(u8_bytes, 0x00) == 0x55AA382D
+    root_off = u32be(u8_bytes, 0x04)
+    total_nodes = u32be(u8_bytes, root_off + 0x08)
+    str_table_off = root_off + total_nodes * 12
+
+    stack = []
+    out_files = {}
+    for idx in 0..(total_nodes - 1):
+        while len(stack) &gt; 0 and stack[-1].end_idx == idx:
+            stack.pop()
+
+        noff = root_off + idx * 12
+        ntype = u8_bytes[noff]
+        name_off = (u8_bytes[noff + 1] &lt;&lt; 16) | (u8_bytes[noff + 2] &lt;&lt; 8) | u8_bytes[noff + 3]
+        data_or_parent = u32be(u8_bytes, noff + 4)
+        size_or_end    = u32be(u8_bytes, noff + 8)
+        name = read_cstr(u8_bytes, str_table_off + name_off)
+
+        prefix = (len(stack) &gt; 0) ? stack[-1].path : ""
+        full_path = (idx == 0) ? "" : (prefix + "/" + name)
+
+        if ntype == 0x01:
+            stack.append({ path: full_path, end_idx: size_or_end })
+        else:
+            out_files[full_path] = u8_bytes[data_or_parent : data_or_parent + size_or_end]
+
+    return out_files</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn" role="note">
+            <strong>Channel Integrity &amp; Asset Scope Note:</strong> While the <code>IMET</code> and <code>IMD5</code> MD5 checks ensure accidental corruption detection, neither is a cryptographic signature; on NAND and optical discs, authenticity is enforced by the outer Ticket/TMD RSA signatures. Inner <code>.brlyt</code>, <code>.brlan</code>, <code>.tpl</code>, and <code>.bns</code> resource formats belong to Nintendo's SDK UI/audio layer and are referenced here only as container payloads.
+        </aside>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> <code>IMET</code> header offsets (including the <code>0x40</code> vs. <code>0x80</code> offset distinction), MD5 zeroing rule, 10-language UTF-16BE table, <code>U8</code> (<code>0x55AA382D</code>) node layout and DFS directory bounds, and <code>IMD5</code> / <code>LZ77</code> wrapping are confirmed across retail Wii disc banners and System Menu channels.</li>
+            <li><strong>Undocumented / Reserved Fields:</strong> IMET <code>Flags</code> (<code>B + 0x058</code>) and the 588-byte padding region (<code>B + 0x3A4..0x5EF</code>) are zeroed in standard retail titles and remain reserved.</li>
+        </ul>
+    </section>
+</body>
+</html>

@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>trophy00.trp, playgo-chunk.dat &amp; sce_sys/ App Layout — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps4" target="_top">PlayStation 4</a><span>/</span><span>Trophy, PlayGo &amp; sce_sys/ Layout</span>
+    </nav>
+
+    <h1>trophy00.trp, playgo-chunk.dat &amp; Standard sce_sys/ App Layout</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">PLAYSTATION 4 · TROPHY ARCHIVE, PLAYGO STREAMING &amp; SYSTEM DIRECTORY</p>
+        <p>Platform-inherited Orbis system metadata formats residing under <code>sce_sys/</code>: the big-endian <code>trophy00.trp</code> trophy archive (<code>0xDCA24D00</code>), the little-endian <code>playgo-chunk.dat</code> progressive installation manifest (<code>plgo</code>), and the canonical <code>sce_sys/</code> application directory tree compiled from <code>.gp4</code> publishing projects.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>sce_sys/trophy/trophy00.trp</code>, <code>sce_sys/playgo-chunk.dat</code>, <code>sce_sys/playgo-manifest.xml</code>, <code>*.gp4</code></dd>
+            <dt>Magic Bytes</dt>
+            <dd>TRP: <code>DC A2 4D 00</code> (<code>u32be 0xDCA24D00</code>); PlayGo: <code>70 6C 67 6F</code> (<code>"plgo"</code>)</dd>
+            <dt>Endianness</dt>
+            <dd><strong>Mixed across files:</strong> <code>trophy00.trp</code> is <strong>big-endian</strong>; <code>playgo-chunk.dat</code> is <strong>little-endian</strong></dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 4 (Orbis OS Trophy Service, PlayGo Installer, and Publishing Tools)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Trophy metadata/icon container, streaming chunk schedule, and Orbis application system layout</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section class="section" id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Every PlayStation 4 application ships a standardized <code>sce_sys/</code> directory (mirrored into both PKG entries and the mounted PFS <code>uroot/sce_sys/</code> tree). Two key binary platform formats live inside this directory alongside <code>param.sfo</code> and shell artwork:</p>
+        <ul>
+            <li><strong><code>trophy00.trp</code> (Big-Endian):</strong> Directly inherits Sony's PlayStation 3 TRP container format (magic <code>0xDCA24D00</code> at offset <code>0x00</code>, 64-byte big-endian header, 64-byte big-endian file entries). On PS4, TRP files typically use format version 2 or 3 and store encrypted trophy XML schemas (<code>TROPCONF.ESFM</code>, <code>TROP.ESFM</code>, <code>TROP_00.ESFM</code>) alongside plain PNG artwork (<code>ICON0.PNG</code>, <code>TROP000.PNG</code>).</li>
+            <li><strong><code>playgo-chunk.dat</code> (Little-Endian):</strong> Orbis-native binary manifest starting with <code>70 6C 67 6F</code> (<code>"plgo"</code>). It encodes progressive install chunks, merged chunk extents (<code>mchunks</code>), language masks, and scenario activation lists generated from a <code>.gp4</code> publishing project (<code>&lt;psproject fmt="gp4"&gt;</code>).</li>
+        </ul>
+    </section>
+
+    <section class="section" id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>trophy00.trp Header (64 bytes / 0x40 at offset 0x00, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>Magic</td>
+                        <td>TRP archive signature <code>0xDCA24D00</code> (<code>DC A2 4D 00</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x04</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>Version</td>
+                        <td>Archive version (<code>1</code>, <code>2</code>, or <code>3</code>; PS4 uses v2/v3).</td>
+                    </tr>
+                    <tr>
+                        <td>0x08</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>FileSize</td>
+                        <td>Total size of the <code>.trp</code> file in bytes.</td>
+                    </tr>
+                    <tr>
+                        <td>0x10</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>EntryCount</td>
+                        <td>Number of 64-byte file entries starting at offset <code>0x40</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>0x14</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>EntrySize</td>
+                        <td>Byte size of each entry record (<code>0x40</code> = 64 bytes).</td>
+                    </tr>
+                    <tr>
+                        <td>0x18</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>DevFlag</td>
+                        <td><code>0</code> = retail package, <code>1</code> = development/debug trophy archive.</td>
+                    </tr>
+                    <tr>
+                        <td>0x1C</td>
+                        <td>20</td>
+                        <td>u8[20]</td>
+                        <td>Sha1Digest</td>
+                        <td>SHA-1 checksum of the entire TRP file (computed with this 20-byte field zeroed; present in v2/v3).</td>
+                    </tr>
+                    <tr>
+                        <td>0x30</td>
+                        <td>16</td>
+                        <td>u8[16]</td>
+                        <td>Padding</td>
+                        <td>Zero-filled reserved padding.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>trophy00.trp File Entry Record (64 bytes / 0x40 each, Big-Endian, starting at 0x40)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>32</td>
+                        <td>char[32]</td>
+                        <td>Name</td>
+                        <td>NUL-padded ASCII filename (e.g., <code>TROPCONF.ESFM</code>, <code>TROP.ESFM</code>, <code>ICON0.PNG</code>, <code>TROP000.PNG</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x20</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>Offset</td>
+                        <td>Absolute byte offset to the member payload.</td>
+                    </tr>
+                    <tr>
+                        <td>0x28</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>Size</td>
+                        <td>Payload size in bytes.</td>
+                    </tr>
+                    <tr>
+                        <td>0x30</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>Flags</td>
+                        <td>Entry attributes (<code>0</code> = unencrypted PNG/SFM; non-zero e.g. <code>0x00000001</code> / <code>0x00000003</code> = encrypted <code>.ESFM</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x34</td>
+                        <td>12</td>
+                        <td>u8[12]</td>
+                        <td>Padding</td>
+                        <td>Zero-filled padding.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>playgo-chunk.dat Header Core Fields (Little-Endian, at offset 0x00)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>4</td>
+                        <td>u8[4]</td>
+                        <td>magic</td>
+                        <td>Constant ASCII bytes <code>"plgo"</code> (<code>70 6C 67 6F</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x04</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>version_major</td>
+                        <td>PlayGo binary format major version (commonly <code>0x0001</code> or <code>0x0002</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x06</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>version_minor</td>
+                        <td>PlayGo binary format minor version (<code>0x0000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x08</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>image_count</td>
+                        <td>Number of package/disc images covered (typically <code>1</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x0A</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>chunk_count</td>
+                        <td>Total number of defined PlayGo chunks.</td>
+                    </tr>
+                    <tr>
+                        <td>0x0C</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>mchunk_count</td>
+                        <td>Total number of merged chunk (<code>mchunk</code>) physical extents.</td>
+                    </tr>
+                    <tr>
+                        <td>0x0E</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>scenario_count</td>
+                        <td>Number of PlayGo installation scenarios.</td>
+                    </tr>
+                    <tr>
+                        <td>0x10</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>file_size</td>
+                        <td>Total size of <code>playgo-chunk.dat</code> in bytes.</td>
+                    </tr>
+                    <tr>
+                        <td>0x14</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>default_scenario_id</td>
+                        <td>Default scenario index used when no explicit user choice applies.</td>
+                    </tr>
+                    <tr>
+                        <td>0x16</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>attrib</td>
+                        <td>PlayGo attribute flags bitmask.</td>
+                    </tr>
+                    <tr>
+                        <td>0x18</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>sdk_version</td>
+                        <td>Publishing SDK version (packed Orbis SDK version integer).</td>
+                    </tr>
+                    <tr>
+                        <td>0x1C</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>disc_count</td>
+                        <td>Optical disc count (<code>1</code> for single-disc/digital packages).</td>
+                    </tr>
+                    <tr>
+                        <td>0x1E</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>layer_bmp</td>
+                        <td>Disc layer bitmap.</td>
+                    </tr>
+                    <tr>
+                        <td>0x20</td>
+                        <td>32</td>
+                        <td>u8[32]</td>
+                        <td>reserved</td>
+                        <td>Zero-filled reserved bytes (<code>0x20..0x3F</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x40</td>
+                        <td>48</td>
+                        <td>char[48]</td>
+                        <td>content_id</td>
+                        <td>36-character PSN Content ID string plus zero padding (<code>0x40..0x6F</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x70+</td>
+                        <td>var</td>
+                        <td>{u32le, u32le}[]</td>
+                        <td>section_descriptors</td>
+                        <td>Header offset/size descriptor pairs pointing to <code>chunk_attrs</code>, <code>chunk_mchunks</code>, <code>chunk_labels</code>, <code>mchunk_attrs</code>, <code>scenario_attrs</code>, <code>scenario_chunks</code>, and <code>scenario_labels</code> (exact slot layout depends on <code>version_major</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Standard sce_sys/ Directory Inventory (Platform-Inherited Files Only)</caption>
+                <thead>
+                    <tr>
+                        <th>Relative Path</th>
+                        <th>Format</th>
+                        <th>PKG Entry ID</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>sce_sys/param.sfo</code></td>
+                        <td>PSF v1.1 (LE)</td>
+                        <td><code>0x1000</code></td>
+                        <td>Core title metadata, version, parental rating, and attribute flags</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/icon0.png</code></td>
+                        <td>PNG (512&times;512)</td>
+                        <td><code>0x1200</code></td>
+                        <td>Main home screen application icon</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/pic0.png</code></td>
+                        <td>PNG (1920&times;1080)</td>
+                        <td><code>0x1220</code></td>
+                        <td>Overlay card/detail image</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/pic1.png</code></td>
+                        <td>PNG (1920&times;1080)</td>
+                        <td><code>0x1006</code></td>
+                        <td>Fullscreen background splash artwork</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/snd0.at9</code></td>
+                        <td>ATRAC9 RIFF</td>
+                        <td><code>0x1240</code></td>
+                        <td>Background music loop played on the system shell screen</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/playgo-chunk.dat</code></td>
+                        <td>PLGO (LE)</td>
+                        <td><code>0x1001</code></td>
+                        <td>Binary progressive installation chunk and scenario table</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/playgo-manifest.xml</code></td>
+                        <td>UTF-8 XML</td>
+                        <td><code>0x1003</code></td>
+                        <td>Human-readable PlayGo chunk/scenario XML manifest</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/trophy/trophy00.trp</code></td>
+                        <td>TRP v2/v3 (BE)</td>
+                        <td><code>0x1400+</code></td>
+                        <td>Trophy configuration XMLs (<code>.ESFM</code>) and trophy PNG icons</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/npbind.dat</code>, <code>nptitle.dat</code></td>
+                        <td>NP Binary</td>
+                        <td><code>0x0403</code> / <code>0x0402</code></td>
+                        <td>Network Platform (NP) trophy communication / service bindings</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/pronunciation.xml</code>, <code>.sig</code></td>
+                        <td>XML + Sig</td>
+                        <td><code>0x1004</code> / <code>0x1005</code></td>
+                        <td>Voice recognition title aliases and signature</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/changeinfo/changeinfo.xml</code></td>
+                        <td>UTF-8 XML</td>
+                        <td><code>0x1260</code></td>
+                        <td>Patch update history notes displayed in system UI</td>
+                    </tr>
+                    <tr>
+                        <td><code>sce_sys/shareparam.json</code></td>
+                        <td>UTF-8 JSON</td>
+                        <td>PFS only</td>
+                        <td>Share button screenshot/video overlay and blocking parameters</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PlayGo Scenario Types &amp; Chunk Attributes</caption>
+                <thead>
+                    <tr>
+                        <th>Structure</th>
+                        <th>Field / Value</th>
+                        <th>Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>scenario_attr.type</code></td>
+                        <td><code>1</code> (Single-Player / Default)</td>
+                        <td>Standard launch scenario specifying initial chunks required before booting.</td>
+                    </tr>
+                    <tr>
+                        <td><code>scenario_attr.type</code></td>
+                        <td><code>2</code> (Multi-Player / Mode-Select)</td>
+                        <td>Alternate user-selectable initial scenario (e.g., multiplayer-first install).</td>
+                    </tr>
+                    <tr>
+                        <td><code>chunk_attr.req_locus</code></td>
+                        <td><code>2</code> / <code>3</code></td>
+                        <td>Required storage locus (e.g., local HDD/SSD vs. optical/streamable).</td>
+                    </tr>
+                    <tr>
+                        <td><code>trp_entry.Flags</code></td>
+                        <td><code>0x00000000</code></td>
+                        <td>Unencrypted archive member (standard for <code>ICON0.PNG</code>, <code>TROP*.PNG</code>, or v1 <code>.SFM</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>trp_entry.Flags</code></td>
+                        <td><code>0x00000001</code> / <code>0x00000003</code></td>
+                        <td>Encrypted/signed <code>.ESFM</code> trophy definition XML in PS4 retail TRP archives.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <p><strong>TRP SHA-1 Verification Formula:</strong></p>
+        <pre><code>// For trophy00.trp Version &gt;= 2:
+expected_sha1 = trp_bytes[0x1C : 0x30]
+temp = copy(trp_bytes)
+temp[0x1C : 0x30] = 20 zero bytes
+actual_sha1 = SHA1(temp)
+assert actual_sha1 == expected_sha1</code></pre>
+
+        <p><strong>GP4 Authoring Manifest Relationship:</strong> During build time, Publishing Tools read a <code>.gp4</code> XML project (<code>&lt;psproject fmt="gp4" version="1000"&gt;</code>) containing <code>&lt;volume&gt;</code>, <code>&lt;files&gt;</code>, <code>&lt;rootdir&gt;</code>, and <code>&lt;scenarios&gt;</code>, compiling those rules into <code>playgo-chunk.dat</code>, the PFS filesystem tree, and the final <code>.pkg</code>.</p>
+    </section>
+
+    <section class="section" id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>TRP Entry Alignment &amp; <code>EntrySize</code> Checks:</strong> Although standard PS4 TRPs set <code>EntrySize == 0x40</code>, parsers should validate <code>EntrySize &gt;= 0x40</code> and advance entry cursors by <code>EntrySize</code> rather than a hardcoded constant.</li>
+            <li><strong><code>.SFM</code> vs. <code>.ESFM</code> Inside TRP:</strong> Unencrypted development/v1 TRPs contain plain XML files (<code>TROPCONF.SFM</code>, <code>TROP.SFM</code>), whereas retail PS4 TRPs carry AES-128-CBC encrypted <code>.ESFM</code> members with non-zero <code>Flags</code>. PNG icons inside the same TRP remain plaintext and can be extracted without decryption keys.</li>
+            <li><strong>PlayGo Chunk Ordering &amp; Language Masks:</strong> In <code>playgo-chunk.dat</code>, chunk <code>0</code> holds the initial mandatory boot files (<code>eboot.bin</code>, <code>sce_sys/</code>, core runtime PRXs). Each chunk carries a 64-bit language mask allowing localized assets to be filtered by system language during progressive download.</li>
+            <li><strong>PKG vs. Mounted PFS Mirroring:</strong> Files inside <code>sce_sys/</code> appear both as CNT entry records in the outer <code>.pkg</code> (for pre-install XMB inspection before mounting PFS) and inside the inner PFS <code>uroot/sce_sys/</code> directory. Parsers reading an unpacked game directory should prefer <code>sce_sys/</code> directly, while <code>.pkg</code> inspectors can read CNT entries <code>0x1000..0x1400+</code> without mounting PFS.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="pseudocode">
+        <h2>5. Step-by-Step Pseudocode</h2>
+        <pre><code>function ParseOrbisTrp(trp_bytes):
+    if len(trp_bytes) &lt; 0x40:
+        error("Truncated TRP header")
+    if read_u32be(trp_bytes, 0x00) != 0xDCA24D00:
+        error("Invalid TRP magic")
+
+    version     = read_u32be(trp_bytes, 0x04)
+    file_size   = read_u64be(trp_bytes, 0x08)
+    entry_count = read_u32be(trp_bytes, 0x10)
+    entry_size  = read_u32be(trp_bytes, 0x14)
+
+    if entry_size &lt; 0x40 or 0x40 + entry_count * entry_size &gt; len(trp_bytes):
+        error("TRP entry table out of bounds")
+
+    if version &gt;= 2:
+        stored_sha1 = trp_bytes[0x1C : 0x30]
+        check_buf = bytearray(trp_bytes)
+        check_buf[0x1C : 0x30] = b"\x00" * 20
+        sha1_valid = (SHA1(check_buf) == stored_sha1)
+    else:
+        sha1_valid = null
+
+    members = []
+    for i in 0 .. entry_count - 1:
+        off = 0x40 + i * entry_size
+        name   = decode_ascii(trp_bytes[off : off + 0x20]).split("\x00", 1)[0]
+        m_off  = read_u64be(trp_bytes, off + 0x20)
+        m_size = read_u64be(trp_bytes, off + 0x28)
+        flags  = read_u32be(trp_bytes, off + 0x30)
+        if m_off + m_size &gt; len(trp_bytes):
+            error("TRP member out of bounds: " + name)
+        members.append({ name: name, offset: m_off, size: m_size, flags: flags })
+
+    return { version: version, sha1_valid: sha1_valid, members: members }
+
+function ParsePlayGoHeader(plgo_bytes):
+    if len(plgo_bytes) &lt; 0x70:
+        error("Truncated playgo-chunk.dat")
+    if plgo_bytes[0x00 : 0x04] != b"plgo":
+        error("Invalid PLGO magic")
+
+    return {
+        version_major:       read_u16le(plgo_bytes, 0x04),
+        version_minor:       read_u16le(plgo_bytes, 0x06),
+        image_count:         read_u16le(plgo_bytes, 0x08),
+        chunk_count:         read_u16le(plgo_bytes, 0x0A),
+        mchunk_count:        read_u16le(plgo_bytes, 0x0C),
+        scenario_count:      read_u16le(plgo_bytes, 0x0E),
+        file_size:           read_u32le(plgo_bytes, 0x10),
+        default_scenario_id: read_u16le(plgo_bytes, 0x14),
+        attrib:              read_u16le(plgo_bytes, 0x16),
+        sdk_version:         read_u32le(plgo_bytes, 0x18),
+        disc_count:          read_u16le(plgo_bytes, 0x1C),
+        layer_bmp:           read_u16le(plgo_bytes, 0x1E),
+        content_id:          decode_ascii(plgo_bytes[0x40 : 0x70]).split("\x00", 1)[0],
+    }</code></pre>
+    </section>
+
+    <section class="section" id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <div class="badge-group">
+            <span class="badge confidence-confirmed">Confirmed: TRP Header/Entries &amp; sce_sys/ Layout</span>
+            <span class="badge confidence-revision">Revision-Dependent: PlayGo v1 vs. v2 Table Slots</span>
+            <span class="badge confidence-unverified">Crypto-Gated: .ESFM Decryption Key</span>
+        </div>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> The big-endian 64-byte TRP header (<code>0xDCA24D00</code>), 64-byte entry layout, SHA-1 validation rule, core <code>playgo-chunk.dat</code> header (<code>0x00..0x6F</code>), and standard <code>sce_sys/</code> filenames/PKG entry IDs are confirmed across Orbis SDK and open-source PlayStation 4 packaging utilities.</li>
+            <li><strong>SDK-Revision-Dependent:</strong> Header offset/size descriptor slots beyond <code>0x70</code> in <code>playgo-chunk.dat</code> evolved between early <code>version_major == 1</code> and later <code>version_major == 2</code> releases (adding inner mchunk tables and extended chunk counts).</li>
+            <li><strong>Crypto-Gated Fields:</strong> Decrypting <code>.ESFM</code> XML files inside retail PS4 <code>trophy00.trp</code> archives requires platform trophy encryption keys not distributed here.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Security &amp; Key Exclusion Notice:</strong> Do NOT embed Sony ESFM trophy decryption keys or pronunciation signature private keys in clean-room tooling. Plain PNG assets (<code>ICON0.PNG</code>, <code>TROP*.PNG</code>) inside TRP archives can be inspected safely without cryptographic material.</p>
+        </aside>
+    </section>
+</body>
+</html>

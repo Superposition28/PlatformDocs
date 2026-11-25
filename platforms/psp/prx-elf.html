@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>~PSP Encrypted PRX &amp; Relocatable ELF32-MIPS Modules — PlayStation Portable — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#psp" target="_top">PlayStation Portable</a>
+        <span>/</span>
+        <span>~PSP &amp; PRX / ELF32-MIPS</span>
+    </nav>
+
+    <h1>~PSP Encrypted PRX Wrapper &amp; Relocatable ELF32-MIPS Modules</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">PSP Executable &amp; Shared Module Formats · Little-Endian</p>
+        <p>PSP retail executables (<code>EBOOT.BIN</code>, <code>DATA.PSP</code>, system <code>*.PRX</code>) are wrapped in a 336-byte (<code>0x150</code>) <code>~PSP</code> encrypted/signed header processed by the Kirk hardware crypto engine. Once decrypted (or in plain devkit/homebrew binaries such as <code>BOOT.BIN</code>), the inner image is a little-endian ELF32-MIPS module—either a static executable (<code>ET_EXEC = 0x0002</code>) or a relocatable PRX module (<code>ET_PSP_PRX = 0xFFA0</code>) carrying <code>.rodata.sceModuleInfo</code>, NID import/export tables, and MIPS relocations.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>EBOOT.BIN</code>, <code>BOOT.BIN</code>, <code>*.PRX</code>, <code>DATA.PSP</code> (inside <code>EBOOT.PBP</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>7E 50 53 50</code> (<code>"~PSP"</code>) wrapper; <code>7F 45 4C 46</code> (<code>"\x7FELF"</code>) inner/plain ELF32</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (<code>u16le</code>, <code>u32le</code>, <code>ELFDATA2LSB</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation Portable Kernel &amp; User Module Loader (<code>sceKernelLoadModule</code> / <code>mesg_led</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Encrypted executable wrapper &amp; relocatable shared module (<code>application/x-psp-prx</code>, <code>application/x-elf</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout</a></li>
+            <li><a href="#flags">3. Flags, NIDs &amp; Relocation Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification" class="section">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>The PSP kernel loader dispatches executables based on the leading 4-byte signature:</p>
+        <ul>
+            <li><strong><code>7E 50 53 50</code> (<code>~PSP</code>):</strong> Retail signed and encrypted PRX wrapper (336-byte header). Decryption and CMAC/SHA-1 verification are performed via the Kirk security processor using keys selected by the header's <code>tag</code> and <code>decrypt_mode</code> fields. The decrypted payload may also be compressed (gzip or <code>2RLZ</code>) before yielding an ELF32 image.</li>
+            <li><strong><code>7F 45 4C 46</code> (<code>\x7FELF</code>):</strong> Standard 32-bit little-endian MIPS ELF (<code>EI_CLASS = 1</code>, <code>EI_DATA = 1</code>, <code>e_machine = 8</code>). Static ELFs use <code>e_type = 0x0002</code> (<code>ET_EXEC</code>), whereas relocatable PRX executables and libraries use Sony's processor-specific type <code>e_type = 0xFFA0</code> (<code>ET_PSP_PRX</code>).</li>
+        </ul>
+    </section>
+
+    <section id="layout" class="section">
+        <h2>2. Binary Layout</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption><code>~PSP</code> Encrypted Wrapper Header (336 / 0x150 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u8[4]</code></td>
+                        <td><code>signature</code></td>
+                        <td>Magic <code>7E 50 53 50</code> (<code>"~PSP"</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>mod_attribute</code></td>
+                        <td>Module attribute flags (e.g., <code>0x1000</code> kernel, <code>0x0800</code> VSH, <code>0x0000</code> user)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x06</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>comp_attribute</code></td>
+                        <td>Compression &amp; wrapper attributes (bit 0 = compressed payload)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>module_ver_lo</code></td>
+                        <td>Module minor version byte</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x09</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>module_ver_hi</code></td>
+                        <td>Module major version byte</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0A</code></td>
+                        <td>28</td>
+                        <td><code>char[28]</code></td>
+                        <td><code>modname</code></td>
+                        <td>NUL-padded ASCII module name (matches <code>sceModuleInfo.modname</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x26</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>version</code></td>
+                        <td><code>~PSP</code> header format version (commonly <code>1</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x27</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>nsegments</code></td>
+                        <td>Number of ELF segments described in header (<code>1..4</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>elf_size</code></td>
+                        <td>Decompressed ELF size in bytes</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>psp_size</code></td>
+                        <td>Total <code>~PSP</code> file size in bytes</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>boot_entry</code></td>
+                        <td>Entry point offset (<code>e_entry</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x34</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>modinfo_offset</code></td>
+                        <td>Offset of <code>.rodata.sceModuleInfo</code> (bit 31 set for kernel modules)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x38</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>bss_size</code></td>
+                        <td>Total <code>.bss</code> zero-initialized memory size</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x3C</code></td>
+                        <td>8</td>
+                        <td><code>u16le[4]</code></td>
+                        <td><code>seg_align</code></td>
+                        <td>Alignment values for up to 4 segments</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x44</code></td>
+                        <td>16</td>
+                        <td><code>u32le[4]</code></td>
+                        <td><code>seg_address</code></td>
+                        <td>Relative load offsets for up to 4 segments</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x54</code></td>
+                        <td>16</td>
+                        <td><code>u32le[4]</code></td>
+                        <td><code>seg_size</code></td>
+                        <td>Sizes for up to 4 segments</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x64</code></td>
+                        <td>20</td>
+                        <td><code>u32le[5]</code></td>
+                        <td><code>reserved</code></td>
+                        <td>Reserved header words</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x78</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>devkit_version</code></td>
+                        <td>SDK / firmware target version word</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x7C</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>decrypt_mode</code></td>
+                        <td>Decryption / key-slot mode selector (kernel, user, game EBOOT, updater, etc.)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x7D</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>padding</code></td>
+                        <td>Alignment padding (<code>0x00</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x7E</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>overlap_size</code></td>
+                        <td>In-place decompression overlap margin (if compressed)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x80</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>aes_key</code></td>
+                        <td>Encrypted payload AES key / Kirk seed block</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x90</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>cmac_key</code></td>
+                        <td>CMAC key seed</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xA0</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>cmac_header_hash</code></td>
+                        <td>CMAC-AES tag covering header metadata</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xB0</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>cmac_data_hash</code></td>
+                        <td>CMAC-AES tag covering encrypted payload</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xC0</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>tag</code></td>
+                        <td>32-bit Kirk key tag selecting firmware/category key schedule</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xC4</code></td>
+                        <td>88</td>
+                        <td><code>u8[88]</code></td>
+                        <td><code>s_check</code></td>
+                        <td>Signature / Kirk verification block</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x11C</code></td>
+                        <td>20</td>
+                        <td><code>u8[20]</code></td>
+                        <td><code>sha1_hash</code></td>
+                        <td>SHA-1 verification digest</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x130</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>key_data</code></td>
+                        <td>Secondary key / IV material</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x140</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>reserved2</code></td>
+                        <td>Trailing header block; encrypted payload begins at offset <code>0x150</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>ELF32-MIPS PRX Header (52 / 0x34 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>16</td>
+                        <td><code>u8[16]</code></td>
+                        <td><code>e_ident</code></td>
+                        <td><code>7F 45 4C 46</code>, <code>EI_CLASS=1</code> (32-bit), <code>EI_DATA=1</code> (little-endian), <code>EI_VERSION=1</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_type</code></td>
+                        <td><code>0xFFA0</code> (<code>ET_PSP_PRX</code> relocatable PRX) or <code>0x0002</code> (<code>ET_EXEC</code> static ELF)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x12</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_machine</code></td>
+                        <td><code>0x0008</code> (<code>EM_MIPS</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_version</code></td>
+                        <td><code>1</code> (<code>EV_CURRENT</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_entry</code></td>
+                        <td>Entry address (virtual address in <code>ET_EXEC</code>; relative offset in <code>ET_PSP_PRX</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_phoff</code></td>
+                        <td>Program Header Table file offset</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_shoff</code></td>
+                        <td>Section Header Table file offset (optional at runtime; <code>0</code> if stripped)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x24</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_flags</code></td>
+                        <td>MIPS ABI/CPU flags (includes Allegrex <code>0x00A20000</code>, EABI32/noreorder bits)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_ehsize</code></td>
+                        <td>ELF header size (<code>0x0034</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2A</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_phentsize</code></td>
+                        <td>Program header entry size (<code>0x0020</code> = 32 bytes)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2C</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_phnum</code></td>
+                        <td>Number of program headers</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2E</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_shentsize</code></td>
+                        <td>Section header entry size (<code>0x0028</code> = 40 bytes)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_shnum</code></td>
+                        <td>Number of section headers</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x32</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_shstrndx</code></td>
+                        <td>Section name string table index</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption><code>.rodata.sceModuleInfo</code> Structure (52 / 0x34 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>modattribute</code></td>
+                        <td>Module attributes (kernel/user/VSH/stop flags)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02</code></td>
+                        <td>2</td>
+                        <td><code>u8[2]</code></td>
+                        <td><code>modversion</code></td>
+                        <td><code>[0]</code> minor version, <code>[1]</code> major version</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>28</td>
+                        <td><code>char[28]</code></td>
+                        <td><code>modname</code></td>
+                        <td>NUL-terminated module identifier string</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>gp_value</code></td>
+                        <td>MIPS global pointer (<code>$gp</code>) address/offset</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x24</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>ent_top</code></td>
+                        <td>Start address/offset of <code>.lib.ent</code> export table</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>ent_end</code></td>
+                        <td>End address/offset of <code>.lib.ent</code> export table</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>stub_top</code></td>
+                        <td>Start address/offset of <code>.lib.stub</code> import table</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>stub_end</code></td>
+                        <td>End address/offset of <code>.lib.stub</code> import table</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption><code>.lib.ent</code> Export Entry (16 / 0x10 bytes) &amp; <code>.lib.stub</code> Import Entry (20 / 0x14 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>libname</code></td>
+                        <td>Address of NUL-terminated library name (or <code>0</code> for module <code>syslib</code> exports)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>2</td>
+                        <td><code>u8[2]</code></td>
+                        <td><code>version</code></td>
+                        <td>Library minor/major version bytes</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x06</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>attribute</code></td>
+                        <td>Library linkage flags (e.g., <code>0x4000</code> syscall, <code>0x8000</code> user export, <code>0x0008</code> weak import)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>len</code></td>
+                        <td>Entry length in 32-bit words (<code>4</code> for <code>.lib.ent</code>, <code>5</code> for <code>.lib.stub</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x09</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>varcount / vstubcount</code></td>
+                        <td>Number of exported/imported variable NID entries</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0A</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>funccount / stubcount</code></td>
+                        <td>Number of exported/imported function NID entries</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>entrytable / nidtable</code></td>
+                        <td>In <code>.lib.ent</code>: pointer to <code>u32le[funccount+varcount]</code> NIDs followed immediately by <code>u32le[funccount+varcount]</code> target addresses. In <code>.lib.stub</code>: pointer to <code>u32le[stubcount]</code> NID array</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>stubtable</code> (import only)</td>
+                        <td>In <code>.lib.stub</code> only: pointer to 8-byte MIPS call stubs in <code>.sceStub.text</code> (<code>jr $ra; nop</code> or <code>syscall</code> patched by loader)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags" class="section">
+        <h2>3. Flags, NIDs &amp; Relocation Formulas</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption><code>~PSP</code> &amp; <code>sceModuleInfo</code> Attribute / Compression Flags</caption>
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Mask / Value</th>
+                        <th>Type</th>
+                        <th>Symbol</th>
+                        <th>Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>mod_attribute</code></td>
+                        <td><code>0x0001</code></td>
+                        <td><code>u16</code></td>
+                        <td><code>SCE_MODULE_CANT_STOP</code></td>
+                        <td>Module cannot be stopped after start</td>
+                    </tr>
+                    <tr>
+                        <td><code>mod_attribute</code></td>
+                        <td><code>0x0002</code></td>
+                        <td><code>u16</code></td>
+                        <td><code>SCE_MODULE_EXCLUSIVE_LOAD</code></td>
+                        <td>Only one instance may be loaded</td>
+                    </tr>
+                    <tr>
+                        <td><code>mod_attribute</code></td>
+                        <td><code>0x0800</code></td>
+                        <td><code>u16</code></td>
+                        <td><code>SCE_MODULE_VSH</code></td>
+                        <td>VSH (XMB) privilege mode</td>
+                    </tr>
+                    <tr>
+                        <td><code>mod_attribute</code></td>
+                        <td><code>0x1000</code></td>
+                        <td><code>u16</code></td>
+                        <td><code>SCE_MODULE_KERNEL</code></td>
+                        <td>Kernel-mode privilege; loads into kernel partition</td>
+                    </tr>
+                    <tr>
+                        <td><code>comp_attribute</code></td>
+                        <td><code>0x0001</code></td>
+                        <td><code>u16</code></td>
+                        <td><code>PSP_MODULE_COMPRESSED</code></td>
+                        <td>Payload after decryption is compressed (gzip <code>1F 8B</code> or <code>2RLZ</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>comp_attribute</code></td>
+                        <td><code>0x0200</code></td>
+                        <td><code>u16</code></td>
+                        <td><code>PSP_MODULE_2RLZ</code></td>
+                        <td>Uses Sony <code>2RLZ</code> compression instead of gzip (seen in later firmware revisions)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PRX Relocation Encodings (<code>Elf32_Rel</code>: 8 bytes, <code>SHT_PRXRELOC = 0x700000A0</code>)</caption>
+                <thead>
+                    <tr>
+                        <th>Encoding / Type</th>
+                        <th>ID / Bits</th>
+                        <th>Type</th>
+                        <th>Formula</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Type A <code>r_info</code></td>
+                        <td><code>bits 0..7</code></td>
+                        <td><code>u8</code></td>
+                        <td><code>r_type = r_info &amp; 0xFF</code></td>
+                        <td>MIPS relocation type</td>
+                    </tr>
+                    <tr>
+                        <td>Type A <code>ofs_base</code></td>
+                        <td><code>bits 8..15</code></td>
+                        <td><code>u8</code></td>
+                        <td><code>ofs_base = (r_info &gt;&gt; 8) &amp; 0xFF</code></td>
+                        <td>Program header index of the segment containing <code>r_offset</code></td>
+                    </tr>
+                    <tr>
+                        <td>Type A <code>addr_base</code></td>
+                        <td><code>bits 16..23</code></td>
+                        <td><code>u8</code></td>
+                        <td><code>addr_base = (r_info &gt;&gt; 16) &amp; 0xFF</code></td>
+                        <td>Program header index of the target base address added to the relocated word</td>
+                    </tr>
+                    <tr>
+                        <td><code>R_MIPS_NONE</code></td>
+                        <td><code>0</code></td>
+                        <td>Reloc</td>
+                        <td>No operation</td>
+                        <td>Alignment or padding relocation record</td>
+                    </tr>
+                    <tr>
+                        <td><code>R_MIPS_16</code></td>
+                        <td><code>1</code></td>
+                        <td>Reloc</td>
+                        <td><code>*(u16*)(P) += S</code></td>
+                        <td>16-bit halfword relocation</td>
+                    </tr>
+                    <tr>
+                        <td><code>R_MIPS_32</code></td>
+                        <td><code>2</code></td>
+                        <td>Reloc</td>
+                        <td><code>*(u32*)(P) += S</code></td>
+                        <td>32-bit direct pointer relocation</td>
+                    </tr>
+                    <tr>
+                        <td><code>R_MIPS_26</code></td>
+                        <td><code>4</code></td>
+                        <td>Reloc</td>
+                        <td><code>target = ((insn &amp; 0x03FFFFFF) &lt;&lt; 2) + S; insn = (insn &amp; 0xFC000000) | ((target &gt;&gt; 2) &amp; 0x03FFFFFF)</code></td>
+                        <td>MIPS <code>j</code> / <code>jal</code> 26-bit instruction target relocation</td>
+                    </tr>
+                    <tr>
+                        <td><code>R_MIPS_HI16</code> / <code>R_MIPS_LO16</code></td>
+                        <td><code>5</code> / <code>6</code></td>
+                        <td>Reloc</td>
+                        <td><code>A = (hi16 &lt;&lt; 16) + sign_ext16(lo16) + S; new_hi = (A + 0x8000) &gt;&gt; 16; new_lo = A &amp; 0xFFFF</code></td>
+                        <td>Paired upper/lower 16-bit immediate relocation (compensates for signed <code>LO16</code> carry)</td>
+                    </tr>
+                    <tr>
+                        <td><code>R_MIPS_GPREL16</code></td>
+                        <td><code>7</code></td>
+                        <td>Reloc</td>
+                        <td><code>*(i16*)(P) += S - gp_value</code></td>
+                        <td>16-bit signed offset relative to <code>$gp</code></td>
+                    </tr>
+                    <tr>
+                        <td>Type B (<code>0x700000A1</code>)</td>
+                        <td>Packed stream</td>
+                        <td>Bit-packed</td>
+                        <td>Variable-length command stream</td>
+                        <td>Compressed relocation stream used in newer PRXs; packs <code>ofs_base</code>, <code>addr_base</code>, relocation type, and offset deltas into compact byte codes</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <p><strong>NID Calculation:</strong> Each 32-bit Name IDentifier (NID) in early/standard user libraries is the first 4 bytes (interpreted as <code>u32le</code>) of the SHA-1 digest of the ASCII function or variable name. System kernel modules on firmware 3.70+ randomize system NIDs per firmware build.</p>
+    </section>
+
+    <section id="edge-cases" class="section">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong><code>~PSP</code> Kirk encryption gate vs. plain ELF:</strong> Retail PSP firmware refuses to execute unencrypted ELFs in <code>sceKernelLoadModule</code>. Parsers must check offset <code>0x00</code> for <code>~PSP</code> first; encrypted payloads cannot be parsed as ELF without valid Kirk decryption keys for the header's <code>tag</code> and <code>decrypt_mode</code>.</li>
+            <li><strong><code>.rodata.sceModuleInfo</code> discovery without section headers:</strong> Stripped PRX binaries may have <code>e_shoff == 0</code>. In relocatable PRXs (<code>e_type == 0xFFA0</code>), the kernel locates <code>sceModuleInfo</code> via <code>phdr[0].p_paddr &amp; 0x7FFFFFFF</code> (file offset; bit 31 <code>0x80000000</code> signals kernel mode).</li>
+            <li><strong>Multiple <code>R_MIPS_HI16</code> per <code>R_MIPS_LO16</code>:</strong> Compiler code generation may emit several <code>R_MIPS_HI16</code> records sharing one subsequent <code>R_MIPS_LO16</code>. Loaders must queue pending <code>HI16</code> locations until the matching <code>LO16</code> provides the signed 16-bit addend, then patch all queued <code>HI16</code> instructions and the <code>LO16</code> instruction together.</li>
+            <li><strong>Generalized loader mapping:</strong> Allocate contiguous/aligned segment memory for <code>PT_LOAD</code> headers (<code>p_memsz</code>, zero-filling <code>p_memsz - p_filesz</code>), apply <code>SHT_PRXRELOC</code> (<code>0x700000A0</code>) or <code>PT_PRXRELOC</code> relocations using each segment's runtime base address, patch <code>.lib.stub</code> 8-byte MIPS stubs against loaded <code>.lib.ent</code> exports (<code>j target; nop</code> for user calls, or <code>jr $ra; syscall idx</code> for kernel calls), flush D-cache and invalidate I-cache, and invoke <code>module_start</code> (NID <code>0xD632ACDB</code>).</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode" class="section">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function inspect_psp_executable(buf):
+    if len(buf) &lt; 0x34:
+        error("File too small")
+
+    magic = buf[0x00:0x04]
+    if magic == b"~PSP":
+        if len(buf) &lt; 0x150:
+            error("Truncated ~PSP header")
+        psp_hdr = {
+            "mod_attribute":  read_u16le(buf, 0x04),
+            "comp_attribute": read_u16le(buf, 0x06),
+            "modname":        read_ascii_z(buf, 0x0A, 28),
+            "nsegments":      buf[0x27],
+            "elf_size":       read_u32le(buf, 0x28),
+            "psp_size":       read_u32le(buf, 0x2C),
+            "boot_entry":     read_u32le(buf, 0x30),
+            "modinfo_offset": read_u32le(buf, 0x34),
+            "devkit_version": read_u32le(buf, 0x78),
+            "decrypt_mode":   buf[0x7C],
+            "tag":            read_u32le(buf, 0xC0)
+        }
+        return {"kind": "~PSP", "encrypted": true, "header": psp_hdr}
+
+    if magic != b"\x7FELF":
+        error("Unknown executable magic")
+
+    if buf[0x04] != 1 or buf[0x05] != 1:
+        error("Expected ELF32 little-endian")
+
+    e_type    = read_u16le(buf, 0x10)
+    e_machine = read_u16le(buf, 0x12)
+    if e_machine != 0x0008:
+        error("Expected EM_MIPS (0x0008)")
+
+    e_entry = read_u32le(buf, 0x18)
+    e_phoff = read_u32le(buf, 0x1C)
+    e_shoff = read_u32le(buf, 0x20)
+    e_phnum = read_u16le(buf, 0x2C)
+    e_shnum = read_u16le(buf, 0x30)
+
+    phdrs = [read_elf32_phdr(buf, e_phoff + i * 0x20) for i in range(e_phnum)]
+    shdrs = [read_elf32_shdr(buf, e_shoff + i * 0x28) for i in range(e_shnum)] if e_shoff else []
+
+    modinfo = None
+    if e_type == 0xFFA0 and len(phdrs) &gt; 0:
+        modinfo_off = phdrs[0].p_paddr &amp; 0x7FFFFFFF
+        if modinfo_off + 0x34 &lt;= len(buf):
+            modinfo = parse_sce_module_info(buf, modinfo_off)
+
+    relocs = []
+    for sh in shdrs:
+        if sh.sh_type == 0x700000A0:  # Type A PRX relocations
+            for off in range(sh.sh_offset, sh.sh_offset + sh.sh_size, 8):
+                r_offset = read_u32le(buf, off)
+                r_info   = read_u32le(buf, off + 4)
+                relocs.append({
+                    "offset":    r_offset,
+                    "type":      r_info &amp; 0xFF,
+                    "ofs_base":  (r_info &gt;&gt; 8) &amp; 0xFF,
+                    "addr_base": (r_info &gt;&gt; 16) &amp; 0xFF
+                })
+
+    return {
+        "kind": "ELF32-PRX" if e_type == 0xFFA0 else "ELF32-EXEC",
+        "e_entry": e_entry,
+        "phdrs": phdrs,
+        "modinfo": modinfo,
+        "reloc_count": len(relocs)
+    }</code></pre>
+    </section>
+
+    <section id="provenance" class="section">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>The ELF32-MIPS header, <code>e_type = 0xFFA0</code>, <code>.rodata.sceModuleInfo</code>, <code>.lib.ent</code>, <code>.lib.stub</code>, and Type A <code>SHT_PRXRELOC</code> (<code>0x700000A0</code>) layouts are <strong>confirmed</strong> across PSP SDK/PRX binaries and standard ELF loaders.</p>
+        <aside class="callout-warn">
+            <p><strong>Firmware-revision-dependent ~PSP &amp; Kirk details:</strong> While the 336-byte <code>~PSP</code> header offsets and <code>tag</code>/<code>decrypt_mode</code> fields are well-established, specific Kirk hardware key tables, <code>tag</code>-to-key mappings, <code>comp_attribute</code> compression variants (such as <code>2RLZ</code> vs. gzip), Type B (<code>0x700000A1</code>) packed relocation opcodes, and post-3.70 kernel NID randomization vary across PSP system software revisions. No proprietary Kirk keys are included here.</p>
+        </aside>
+    </section>
+</body>
+</html>

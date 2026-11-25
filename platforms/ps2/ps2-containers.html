@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>IOPRP ROMDIR &amp; ICON.SYS — PlayStation 2 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps2" target="_top">PlayStation 2</a><span>/</span><span>IOPRP ROMDIR &amp; Memory Card ICON.SYS</span>
+    </nav>
+
+    <h1>Sony SDK System Formats: IOPRP ROMDIR &amp; ICON.SYS</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">PLAYSTATION 2 · BIOS/IOPRP ARCHIVE &amp; MEMORY CARD DESCRIPTOR <span class="scope-badge">Platform-Inherited</span></p>
+        <p>This specification documents two foundational Sony PlayStation 2 system formats: (1) the <strong>IOPRP ROMDIR Image</strong> (<code>IOPRP*.IMG</code> / <code>rom0:</code>), a flat 16-byte-aligned firmware archive used to update or replace IOP BIOS modules via <code>SifIopReset</code>, and (2) Memory Card <strong><code>ICON.SYS</code></strong> (<code>PS2D</code>), the fixed 964-byte save directory descriptor read by the PS2 <code>OSDSYS</code> Memory Card Browser to render save titles, gradient backgrounds, 3-light setups, and 3D <code>.icn</code> animations.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>IOPRP*.IMG</code> (e.g. <code>IOPRP255.IMG</code>, <code>IOPRP300.IMG</code>); <code>icon.sys</code> (lowercase inside <code>mc0:/&lt;SAVE_DIR&gt;/</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd>ROMDIR: <code>RESET</code> / <code>ROMDIR</code> 16-byte directory entries (<code>52 45 53 45 54</code>). ICON.SYS: <code>50 53 32 44</code> (<code>PS2D</code>) at offset <code>0x00</code></dd>
+            <dt>Endianness</dt>
+            <dd>Little-Endian (<code>u16le</code>, <code>u32le</code>, <code>f32le</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PS2 IOP Kernel / <code>SifIopReset</code> (ROMDIR); PS2 <code>OSDSYS</code> Memory Card Browser (<code>ICON.SYS</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>IOP firmware replacement image &amp; Memory Card save metadata descriptor (<code>application/octet-stream</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Alignment, Offset &amp; Encoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section class="section" id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <ul>
+            <li><strong>IOPRP ROMDIR Image (<code>IOPRP*.IMG</code>):</strong> Shipped on PS2 optical discs so applications can reboot the IOP with newer Sony SDK <code>.irx</code> drivers (such as updated <code>CDVDMAN</code>, <code>MCMAN</code>, <code>PADMAN</code>, and <code>IOPBTCONF</code>) than those burned into console mask ROM (<code>rom0:</code>). The container stores files sequentially in exact directory order with no explicit offset field.</li>
+            <li><strong>Memory Card <code>icon.sys</code> (<code>PS2D</code>):</strong> Stored inside every PS2 save folder on an 8 MiB MagicGate Memory Card (<code>mc0:/&lt;DIR&gt;/icon.sys</code>). It defines the two-line Shift-JIS title, four-corner background gradient, three directional lights, ambient color, and filenames of the associated 3D <code>.icn</code> geometry files for idle, copy, and delete states.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>ROMDIR Entry Record (16 bytes per entry, NUL-terminated table)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>10</td>
+                        <td><code>char[10]</code></td>
+                        <td><code>name</code></td>
+                        <td>ASCII filename, NUL-padded (max 10 chars; entry 0 is always <code>"RESET\0\0\0\0\0"</code>, entry 1 is <code>"ROMDIR\0\0\0\0"</code>, optional entry 2 is <code>"EXTINFO\0\0\0"</code>). Terminated by all-zero 16-byte entry (<code>name[0] == 0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0A</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>extinfo_size</code></td>
+                        <td>Total byte length of this entry's metadata records inside the <code>EXTINFO</code> file (<code>0</code> if none).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>size</code></td>
+                        <td>Exact unaligned payload byte length of this file.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>EXTINFO Sub-Record Header (4 bytes + ext_len payload bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>value</code></td>
+                        <td>Tag-specific scalar (for <code>type == 2</code>, holds BCD module version).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>ext_len</code></td>
+                        <td>Payload byte length following this 4-byte header (4-byte aligned, e.g. <code>0</code> or <code>4</code>+).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x03</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>type</code></td>
+                        <td>Metadata tag: <code>1</code> = BCD Date (<code>YYYYMMDD</code> <code>u32le</code>), <code>2</code> = Version, <code>3</code> = ASCII Comment, <code>0x7F</code> = Null/Marker.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td><code>ext_len</code></td>
+                        <td><code>u8[]</code></td>
+                        <td><code>data</code></td>
+                        <td>Optional payload bytes (present when <code>ext_len &gt; 0</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Memory Card ICON.SYS Binary Layout (Fixed 964 / 0x3C4 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x000</code></td>
+                        <td>4</td>
+                        <td><code>char[4]</code></td>
+                        <td><code>magic</code></td>
+                        <td>Constant ASCII signature <code>"PS2D"</code> (<code>50 53 32 44</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x004</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>reserved1</code></td>
+                        <td>Reserved / flags (normally <code>0x0000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x006</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>nl_offset</code></td>
+                        <td>Byte offset within <code>title</code> (<code>0x0C0</code>) where line 2 begins (even Shift-JIS boundary).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x008</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>reserved2</code></td>
+                        <td>Reserved (normally <code>0x00000000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>bg_alpha</code></td>
+                        <td>Background opacity: <code>0</code> (transparent) to <code>128</code> (<code>0x80</code>, fully opaque).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x010</code></td>
+                        <td>16</td>
+                        <td><code>u32le[4]</code></td>
+                        <td><code>bg_col_tl</code></td>
+                        <td>Top-left background color <code>(R, G, B, A)</code>, channels in <code>0x00..0x80</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x020</code></td>
+                        <td>16</td>
+                        <td><code>u32le[4]</code></td>
+                        <td><code>bg_col_tr</code></td>
+                        <td>Top-right background color <code>(R, G, B, A)</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x030</code></td>
+                        <td>16</td>
+                        <td><code>u32le[4]</code></td>
+                        <td><code>bg_col_bl</code></td>
+                        <td>Bottom-left background color <code>(R, G, B, A)</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x040</code></td>
+                        <td>16</td>
+                        <td><code>u32le[4]</code></td>
+                        <td><code>bg_col_br</code></td>
+                        <td>Bottom-right background color <code>(R, G, B, A)</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x050</code></td>
+                        <td>48</td>
+                        <td><code>f32le[3][4]</code></td>
+                        <td><code>light_dir[0..2]</code></td>
+                        <td>Three 4-component directional light vectors <code>(X, Y, Z, W)</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x080</code></td>
+                        <td>48</td>
+                        <td><code>f32le[3][4]</code></td>
+                        <td><code>light_col[0..2]</code></td>
+                        <td>Three directional light RGB colors <code>(R, G, B, 0.0)</code> in <code>0.0–1.0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0B0</code></td>
+                        <td>16</td>
+                        <td><code>f32le[4]</code></td>
+                        <td><code>ambient_col</code></td>
+                        <td>Ambient scene color <code>(R, G, B, 0.0)</code> in <code>0.0–1.0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C0</code></td>
+                        <td>68</td>
+                        <td><code>u8[68]</code></td>
+                        <td><code>title</code></td>
+                        <td>NUL-terminated Shift-JIS save title string (split across 2 lines at <code>nl_offset</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x104</code></td>
+                        <td>64</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>icon_list_name</code></td>
+                        <td>NUL-terminated ASCII filename of normal/idle 3D icon (e.g. <code>icon.icn</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x144</code></td>
+                        <td>64</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>icon_copy_name</code></td>
+                        <td>NUL-terminated ASCII filename of copy-operation 3D icon.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x184</code></td>
+                        <td>64</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>icon_delete_name</code></td>
+                        <td>NUL-terminated ASCII filename of delete-operation 3D icon.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C4</code></td>
+                        <td>512</td>
+                        <td><code>u8[512]</code></td>
+                        <td><code>reserved</code></td>
+                        <td>Zero-filled reserved padding up to <code>0x3C4</code> (964 bytes).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="flags">
+        <h2>3. Alignment, Offset &amp; Encoding Formulas</h2>
+
+        <h3>ROMDIR Fixed-Order Offset Derivation</h3>
+        <p><code>RomDirEntry</code> records contain no file offset field. All payloads are laid out sequentially from byte <code>0x00000000</code> in exact directory order, each rounded up to a 16-byte boundary:</p>
+        <ul>
+            <li><code>offset[0] = 0</code> (always <code>RESET</code>; in <code>IOPRP*.IMG</code>, <code>RESET.size</code> is commonly <code>0</code>, placing <code>ROMDIR</code> directly at offset <code>0x00000000</code>).</li>
+            <li><code>offset[i + 1] = offset[i] + ((entry[i].size + 15) &amp; ~15)</code>.</li>
+            <li><code>entry[1]</code> is always <code>ROMDIR</code> itself, and <code>entry[1].size</code> equals <code>(num_entries + 1) * 16</code> (including the 16-byte zero terminator).</li>
+            <li>When <code>EXTINFO</code> is present (<code>entry[2]</code>), its total byte size equals <code>sum(entry[i].extinfo_size)</code> across all non-terminator entries, sliced sequentially in entry order.</li>
+        </ul>
+
+        <h3>ICON.SYS Shift-JIS Title &amp; Color Scaling</h3>
+        <ul>
+            <li><strong>Two-Line Shift-JIS Title:</strong> <code>title[0 .. nl_offset)</code> forms Line 1 and <code>title[nl_offset .. NUL)</code> forms Line 2. Both slices are encoded in <strong>Shift-JIS</strong> (code page 932), typically using full-width 2-byte characters, so <code>nl_offset</code> must align to a character boundary (or <code>0</code> / length of string when single-line).</li>
+            <li><strong>Background Color Range:</strong> Unlike <code>f32le</code> light colors (<code>0.0–1.0</code>), <code>bg_alpha</code> and <code>bg_col_*</code> integer channels use GS fixed-point intensity <code>0x00..0x80</code> (<code>128</code> = 100% / <code>1.0</code>); convert to 8-bit sRGB via <code>clamp(round(val * 255 / 128), 0, 255)</code>.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>Locating <code>ROMDIR</code> When <code>RESET.size &gt; 0</code>:</strong> Full console BIOS dumps store boot executable code inside <code>RESET</code> before <code>ROMDIR</code>. Scanners locate <code>ROMDIR</code> by probing every 16-byte boundary for <code>"RESET\0\0\0\0\0"</code> followed at <code>+0x10</code> by <code>"ROMDIR\0\0\0\0"</code>, and verifying <code>((entry[0].size + 15) &amp; ~15) == romdir_offset</code>.</li>
+            <li><strong><code>IOPRP*.IMG</code> <code>RESET.size == 0</code>:</strong> Disc-bundled IOPRP images omit bootstrap code, setting <code>RESET.size = 0</code> so <code>"RESET\0\0\0\0\0"</code> sits at file offset <code>0x00</code>.</li>
+            <li><strong><code>EXTINFO</code> Alignment &amp; Presence:</strong> Minimal <code>ROMDIR</code> images can omit <code>EXTINFO</code> when all <code>extinfo_size == 0</code>. When present, every sub-record's <code>ext_len</code> is padded to a 4-byte multiple so sequential parsing never misaligns.</li>
+            <li><strong>Case-Sensitive <code>icon.sys</code> &amp; Filename Reuse:</strong> PS2 Memory Card Filesystem (MCFS) paths are case-sensitive; Sony system requirements mandate lowercase <code>icon.sys</code>. All three icon filename fields (<code>icon_list_name</code>, <code>icon_copy_name</code>, <code>icon_delete_name</code>) frequently point to the same <code>.icn</code> file to conserve 8 MiB card space.</li>
+            <li><strong><code>ICON.SYS</code> Exact Size Check:</strong> Conformant <code>icon.sys</code> files are always exactly <code>964</code> bytes (<code>0x3C4</code>); parsers should reject truncated files shorter than <code>0x1C4</code> bytes even if reserved trailing bytes are omitted in non-standard dumps.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function parse_romdir_image(buf):
+    # 1. Locate ROMDIR table on 16-byte boundaries
+    romdir_off = -1
+    for off in range(0, len(buf) - 32, 16):
+        if buf[off .. off + 10] == b"RESET\x00\x00\x00\x00\x00" and \
+           buf[off + 16 .. off + 26] == b"ROMDIR\x00\x00\x00\x00":
+            reset_size = u32le(buf, off + 0x0C)
+            if ((reset_size + 15) &amp; ~15) == off:
+                romdir_off = off
+                break
+    if romdir_off &lt; 0:
+        error("Valid ROMDIR header not found")
+
+    # 2. Read 16-byte entries until null terminator and compute offsets
+    entries = []
+    cur_data_off = 0
+    extinfo_cursor = 0
+    pos = romdir_off
+    while pos + 16 &lt;= len(buf):
+        raw_name = buf[pos .. pos + 10]
+        if raw_name[0] == 0:
+            break
+        name         = raw_name.rstrip(b"\x00").decode("ascii")
+        extinfo_size = u16le(buf, pos + 0x0A)
+        file_size    = u32le(buf, pos + 0x0C)
+        if cur_data_off + file_size &gt; len(buf):
+            error("ROMDIR entry out of bounds: " + name)
+        entries.append({
+            "name": name,
+            "offset": cur_data_off,
+            "size": file_size,
+            "extinfo_offset": extinfo_cursor,
+            "extinfo_size": extinfo_size
+        })
+        cur_data_off += (file_size + 15) &amp; ~15
+        extinfo_cursor += extinfo_size
+        pos += 16
+
+    return entries
+
+function parse_icon_sys(buf):
+    if len(buf) &lt; 0x1C4 or buf[0..4] != b"PS2D":
+        error("Invalid ICON.SYS header (expected PS2D)")
+
+    nl_offset = u16le(buf, 0x06)
+    bg_alpha  = u32le(buf, 0x0C)
+    raw_title = buf[0x0C0 .. 0x104].split(b"\x00", 1)[0]
+    split_at  = min(nl_offset, len(raw_title))
+    line1     = raw_title[0 .. split_at].decode("shift_jis")
+    line2     = raw_title[split_at ..].decode("shift_jis")
+
+    return {
+        "title_line1": line1,
+        "title_line2": line2,
+        "bg_alpha": bg_alpha,
+        "bg_colors": [ [u32le(buf, 0x10 + c*16 + k*4) for k in 0..3] for c in 0..3 ],
+        "light_dirs": [ [f32le(buf, 0x50 + l*16 + k*4) for k in 0..3] for l in 0..2 ],
+        "light_cols": [ [f32le(buf, 0x80 + l*16 + k*4) for k in 0..3] for l in 0..2 ],
+        "ambient":    [f32le(buf, 0xB0 + k*4) for k in 0..3],
+        "icon_list":   read_cstr(buf, 0x104, 64),
+        "icon_copy":   read_cstr(buf, 0x144, 64),
+        "icon_delete": read_cstr(buf, 0x184, 64)
+    }</code></pre>
+    </section>
+
+    <section class="section" id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>
+            <span class="badge confidence-confirmed">Confirmed Spec</span>
+            <span class="badge confidence-unverified">Unverified / Reserved</span>
+        </p>
+        <ul>
+            <li><strong>Confirmed Spec:</strong> <code>ROMDIR</code> 16-byte entry layout, 16-byte alignment offset rules, <code>PS2D</code> 964-byte <code>ICON.SYS</code> field offsets, <code>0x00..0x80</code> GS background color scaling, Shift-JIS encoding, and <code>nl_offset</code> splitting are verified across retail PS2 BIOS ROMs, <code>IOPRP*.IMG</code> images, and <code>OSDSYS</code> behavior.</li>
+            <li><strong>Unverified / Reserved:</strong> <code>ICON.SYS</code> offsets <code>0x004</code> (<code>reserved1</code>), <code>0x008</code> (<code>reserved2</code>), and <code>0x1C4..0x3C3</code> (512-byte tail) are zero in standard saves; certain <code>EXTINFO</code> tag values beyond Date (<code>1</code>), Version (<code>2</code>), Comment (<code>3</code>), and <code>0x7F</code> are sparsely documented across SDK versions.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Shift-JIS Boundary Caution:</strong> Malformed save tools occasionally set <code>nl_offset</code> in the middle of a 2-byte Shift-JIS character or past the NUL terminator; decoders should clamp <code>nl_offset</code> to the NUL-terminated byte length and handle incomplete multibyte sequences gracefully.</p>
+        </aside>
+    </section>
+</body>
+</html>

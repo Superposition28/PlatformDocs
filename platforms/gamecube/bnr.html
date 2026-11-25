@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GameCube Disc Banner (opening.bnr) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#gamecube" target="_top">Nintendo GameCube</a>
+        <span>/</span>
+        <span>Disc Banner (opening.bnr)</span>
+    </nav>
+
+    <h1>GameCube Disc Banner (<code>opening.bnr</code>)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Platform UI Metadata · Nintendo GameCube IPL</p>
+        <p>Fixed-size disc banner file placed in the root of the GameCube FST, supplying the 96&times;32 RGB5A3 4&times;4 tiled disc icon and localized title/developer/description strings displayed by the GameCube IPL menu.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>opening.bnr</code> (in disc FST root)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>42 4E 52 31</code> (<code>"BNR1"</code>) or <code>42 4E 52 32</code> (<code>"BNR2"</code>) at offset <code>0x0000</code></dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian (16-bit RGB5A3 pixel words)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo GameCube IPL (Boot ROM menu)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Disc menu icon &amp; localized metadata (<code>application/x-gamecube-banner</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>When a GameCube disc is inserted with the IPL menu active, the Boot ROM reads <code>opening.bnr</code> from the root of <code>fst.bin</code>. Two variants exist, distinguished solely by the 4-byte ASCII magic at offset <code>0x0000</code> and the resulting count of 320-byte description records:</p>
+        <ul>
+            <li><strong><code>BNR1</code> (<code>0x424E5231</code>):</strong> Single-language variant used on NTSC-U and NTSC-J discs (and single-language releases). Total file size: <code>0x1960</code> (6,496 bytes).</li>
+            <li><strong><code>BNR2</code> (<code>0x424E5232</code>):</strong> Six-language PAL/European variant providing slots for English, German, French, Spanish, Italian, and Dutch. Total file size: <code>0x1FA0</code> (8,096 bytes).</li>
+            <li><strong>Endianness:</strong> All 16-bit icon texels in the <code>96&times;32</code> RGB5A3 image buffer are big-endian (<code>u16be</code>), matching the Flipper GX texture pipeline.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="opening.bnr container layout" tabindex="0">
+            <table class="format-counts">
+                <caption><code>opening.bnr</code> Container Layout (<code>BNR1</code> = 6,496 B; <code>BNR2</code> = 8,096 B)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>char[4]</code></td>
+                        <td><code>Magic</code></td>
+                        <td><code>"BNR1"</code> (<code>0x424E5231</code>) or <code>"BNR2"</code> (<code>0x424E5232</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0004</code></td>
+                        <td><code>0x1C</code> (28)</td>
+                        <td><code>u8[28]</code></td>
+                        <td><code>Padding</code></td>
+                        <td>Reserved zero-padding (<code>0x00</code>) aligning icon data to <code>0x0020</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0020</code></td>
+                        <td><code>0x1800</code> (6144)</td>
+                        <td><code>u16be[3072]</code></td>
+                        <td><code>IconData</code></td>
+                        <td><code>96 &times; 32</code> pixel bitmap stored in Flipper <code>GX_TF_RGB5A3</code> 4&times;4 tiled order.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1820</code></td>
+                        <td><code>0x0140</code> (320)</td>
+                        <td><code>struct</code></td>
+                        <td><code>Descriptions[0]</code></td>
+                        <td>Primary description slot (only slot for <code>BNR1</code>; English slot for <code>BNR2</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1960</code></td>
+                        <td><code>0x0140</code> (320)</td>
+                        <td><code>struct</code></td>
+                        <td><code>Descriptions[1]</code></td>
+                        <td><strong>[BNR2 only]</strong> German description slot.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1AA0</code></td>
+                        <td><code>0x0140</code> (320)</td>
+                        <td><code>struct</code></td>
+                        <td><code>Descriptions[2]</code></td>
+                        <td><strong>[BNR2 only]</strong> French description slot.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1BE0</code></td>
+                        <td><code>0x0140</code> (320)</td>
+                        <td><code>struct</code></td>
+                        <td><code>Descriptions[3]</code></td>
+                        <td><strong>[BNR2 only]</strong> Spanish description slot.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1D20</code></td>
+                        <td><code>0x0140</code> (320)</td>
+                        <td><code>struct</code></td>
+                        <td><code>Descriptions[4]</code></td>
+                        <td><strong>[BNR2 only]</strong> Italian description slot.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1E60</code></td>
+                        <td><code>0x0140</code> (320)</td>
+                        <td><code>struct</code></td>
+                        <td><code>Descriptions[5]</code></td>
+                        <td><strong>[BNR2 only]</strong> Dutch description slot.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Description slot layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Banner Description Slot (320 bytes = <code>0x0140</code> per slot)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td><code>0x20</code> (32)</td>
+                        <td><code>char[32]</code></td>
+                        <td><code>ShortTitle</code></td>
+                        <td>NUL-terminated single-line disc title.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0020</code></td>
+                        <td><code>0x20</code> (32)</td>
+                        <td><code>char[32]</code></td>
+                        <td><code>ShortMaker</code></td>
+                        <td>NUL-terminated single-line publisher/developer name.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0040</code></td>
+                        <td><code>0x40</code> (64)</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>LongTitle</code></td>
+                        <td>NUL-terminated full disc title (may contain <code>0x0A</code> line breaks).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0080</code></td>
+                        <td><code>0x40</code> (64)</td>
+                        <td><code>char[64]</code></td>
+                        <td><code>LongMaker</code></td>
+                        <td>NUL-terminated full publisher/developer name (may contain <code>0x0A</code> line breaks).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00C0</code></td>
+                        <td><code>0x80</code> (128)</td>
+                        <td><code>char[128]</code></td>
+                        <td><code>Description</code></td>
+                        <td>NUL-terminated summary description displayed by IPL (typically up to 2 lines).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>RGB5A3 4&times;4 Tile Addressing</h3>
+        <p>The <code>96 &times; 32</code> icon is partitioned into <code>24 &times; 8</code> tiles of <code>4 &times; 4</code> pixels each, ordered left-to-right then top-to-bottom. Each tile occupies <code>16 &times; 2 = 32</code> bytes (one <code>GX</code> cache line):</p>
+        <pre><code>tiles_x = 96 / 4 = 24
+tiles_y = 32 / 4 = 8
+// For tile (tx, ty) and local texel (px, py) with 0 &lt;= px, py &lt; 4:
+u16_index = ((ty * 24 + tx) * 16) + (py * 4 + px)
+byte_off  = 0x0020 + u16_index * 2
+pixel_x   = tx * 4 + px
+pixel_y   = ty * 4 + py</code></pre>
+
+        <h3>RGB5A3 Pixel Decoding (Bit 15 Mode Selector)</h3>
+        <p>Each big-endian 16-bit texel <code>v = read_u16be(byte_off)</code> encodes either opaque 5-bit RGB or translucent 3-bit alpha + 4-bit RGB depending on bit 15:</p>
+        <ul>
+            <li><strong>Bit 15 = <code>1</code> (<code>(v &amp; 0x8000) != 0</code>) &mdash; Opaque RGB555:</strong>
+                <ul>
+                    <li><code>r5 = (v &gt;&gt; 10) &amp; 0x1F</code> &rarr; <code>R = (r5 &lt;&lt; 3) | (r5 &gt;&gt; 2)</code></li>
+                    <li><code>g5 = (v &gt;&gt; 5) &amp; 0x1F</code> &rarr; <code>G = (g5 &lt;&lt; 3) | (g5 &gt;&gt; 2)</code></li>
+                    <li><code>b5 = v &amp; 0x1F</code> &rarr; <code>B = (b5 &lt;&lt; 3) | (b5 &gt;&gt; 2)</code></li>
+                    <li><code>A = 255</code></li>
+                </ul>
+            </li>
+            <li><strong>Bit 15 = <code>0</code> (<code>(v &amp; 0x8000) == 0</code>) &mdash; Translucent ARGB3444:</strong>
+                <ul>
+                    <li><code>a3 = (v &gt;&gt; 12) &amp; 0x07</code> &rarr; <code>A = (a3 &lt;&lt; 5) | (a3 &lt;&lt; 2) | (a3 &gt;&gt; 1)</code></li>
+                    <li><code>r4 = (v &gt;&gt; 8) &amp; 0x0F</code> &rarr; <code>R = (r4 &lt;&lt; 4) | r4</code></li>
+                    <li><code>g4 = (v &gt;&gt; 4) &amp; 0x0F</code> &rarr; <code>G = (g4 &lt;&lt; 4) | g4</code></li>
+                    <li><code>b4 = v &amp; 0x0F</code> &rarr; <code>B = (b4 &lt;&lt; 4) | b4</code></li>
+                </ul>
+            </li>
+        </ul>
+
+        <h3>BNR2 Language Slot Mapping</h3>
+        <p>The PAL IPL selects the <code>BNR2</code> slot index <code>0..5</code> according to the console SRAM language setting: <code>0</code> = English, <code>1</code> = German, <code>2</code> = French, <code>3</code> = Spanish, <code>4</code> = Italian, <code>5</code> = Dutch.</p>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Strict File Size Checks:</strong> Validate exact minimum size against the magic header: <code>0x1960</code> bytes for <code>BNR1</code> and <code>0x1FA0</code> bytes for <code>BNR2</code>. Reject truncated files before decoding icon tiles or description slots.</li>
+            <li><strong>Text Character Encoding by Region:</strong> <code>BNR1</code> on Japanese discs (<code>bi2.bin</code> <code>CountryCode == 0</code>) encodes strings in Shift-JIS (<code>CP932</code>), whereas NTSC-U and PAL discs use single-byte Windows-1252 / ISO-8859-1. Always treat the disc's region/<code>CountryCode</code> as context when decoding bytes <code>&gt;= 0x80</code>.</li>
+            <li><strong>Missing NUL Terminators &amp; Multiline Strings:</strong> Strings may fill their entire fixed buffer (32, 64, or 128 bytes) without a trailing <code>0x00</code>, or include embedded <code>0x0A</code> (<code>\n</code>) characters inside <code>LongTitle</code>, <code>LongMaker</code>, and <code>Description</code>. Bound string reads to the field capacity and stop at the first <code>0x00</code>.</li>
+            <li><strong>Duplicate/Empty Slots in <code>BNR2</code>:</strong> Some PAL discs repeat the English string in unlocalized slots or leave unused slots empty (starting with <code>0x00</code>); fall back to slot <code>0</code> (English) if a selected language slot is empty.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function decode_rgb5a3_pixel(v):
+    if (v &amp; 0x8000) != 0:
+        r5 = (v &gt;&gt; 10) &amp; 0x1F
+        g5 = (v &gt;&gt; 5)  &amp; 0x1F
+        b5 = v &amp; 0x1F
+        return ((r5 &lt;&lt; 3) | (r5 &gt;&gt; 2), (g5 &lt;&lt; 3) | (g5 &gt;&gt; 2), (b5 &lt;&lt; 3) | (b5 &gt;&gt; 2), 255)
+    else:
+        a3 = (v &gt;&gt; 12) &amp; 0x07
+        r4 = (v &gt;&gt; 8)  &amp; 0x0F
+        g4 = (v &gt;&gt; 4)  &amp; 0x0F
+        b4 = v &amp; 0x0F
+        return ((r4 &lt;&lt; 4) | r4, (g4 &lt;&lt; 4) | g4, (b4 &lt;&lt; 4) | b4, (a3 &lt;&lt; 5) | (a3 &lt;&lt; 2) | (a3 &gt;&gt; 1))
+
+function parse_opening_bnr(data, encoding = "latin1"):
+    assert len(data) &gt;= 0x1960
+    magic = read_ascii(data, 0x0000, 4)
+    if magic == "BNR1":
+        slot_count = 1
+        assert len(data) &gt;= 0x1960
+    elif magic == "BNR2":
+        slot_count = 6
+        assert len(data) &gt;= 0x1FA0
+    else:
+        error("Invalid banner magic; expected BNR1 or BNR2")
+
+    // Decode 96x32 RGBA8888 icon from 24x8 tiles of 4x4 RGB5A3 texels
+    rgba = allocate_rgba_image(96, 32)
+    pos = 0x0020
+    for ty in 0 .. 7:
+        for tx in 0 .. 23:
+            for py in 0 .. 3:
+                for px in 0 .. 3:
+                    v = read_u16be(data, pos)
+                    pos += 2
+                    rgba.set_pixel(tx * 4 + px, ty * 4 + py, decode_rgb5a3_pixel(v))
+
+    slots = []
+    for i in 0 .. slot_count - 1:
+        base = 0x1820 + i * 0x0140
+        slots.append({
+            short_title: decode_cstr(data, base + 0x0000, 32,  encoding),
+            short_maker: decode_cstr(data, base + 0x0020, 32,  encoding),
+            long_title:  decode_cstr(data, base + 0x0040, 64,  encoding),
+            long_maker:  decode_cstr(data, base + 0x0080, 64,  encoding),
+            description: decode_cstr(data, base + 0x00C0, 128, encoding)
+        })
+
+    return { magic, icon_rgba: rgba, descriptions: slots }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn">
+            <p><strong>Text encoding is not self-described in <code>opening.bnr</code>:</strong> Neither <code>BNR1</code> nor <code>BNR2</code> embeds a charset flag. Correct decoding of non-ASCII characters (Shift-JIS vs. Windows-1252) relies on the disc's <code>bi2.bin</code> <code>CountryCode</code> or <code>boot.bin</code> region character.</p>
+        </aside>
+        <ul>
+            <li><strong>Confirmed Hardware/IPL Spec:</strong> Magic values <code>BNR1</code>/<code>BNR2</code>, total byte lengths (<code>0x1960</code> / <code>0x1FA0</code>), <code>96&times;32</code> 4&times;4 tiled <code>GX_TF_RGB5A3</code> pixel encoding, and 320-byte slot field boundaries are invariant across retail GameCube IPL versions.</li>
+            <li><strong>Reserved Padding:</strong> Bytes <code>0x0004</code>–<code>0x001F</code> (28 bytes) are reserved padding (zeroed in standard banners) and ignored by the IPL banner parser.</li>
+        </ul>
+    </section>
+</body>
+</html>

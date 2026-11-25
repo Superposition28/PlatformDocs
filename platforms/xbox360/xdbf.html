@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>XDBF / .gpd / .spa Resource Database — Xbox 360 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#xbox360" target="_top">Xbox 360</a><span>/</span><span>XDBF (.gpd / .spa)</span></nav>
+
+    <h1>XDBF — Xbox Database Format (.gpd / .spa)</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">Indexed Resource Database · Xbox 360 Profiles &amp; Title Metadata</p>
+        <p>Lightweight, namespace-indexed binary database format used both for Xbox 360 title service definitions embedded inside XEX2 executables (<code>.spa</code>) and for per-title/account profile state stored inside <code>CON </code> STFS packages (<code>.gpd</code>).</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>&lt;TitleID&gt;.gpd</code>, <code>FFFE07D1.gpd</code> (Dashboard/Account), <code>*.spa</code> (embedded XEX2 resource), <code>*.xdbf</code></dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>0x58444246</code> (<code>"XDBF"</code> Big-Endian) &middot; <code>0x46424458</code> (<code>"FBDX"</code> when Little-Endian)</dd>
+            <dt>Endianness</dt>
+            <dd>Configurable by header byte order: Big-Endian on Xbox 360 retail/XDK; Little-Endian in PC tooling variants</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Microsoft Xbox 360 XAM (<code>xam.xex</code>), Xbox LIVE Profile &amp; Achievement services</dd>
+            <dt>Role/MIME</dt>
+            <dd>Random-access key/namespace blob database (<code>application/x-xbox360-xdbf</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification" class="section">
+        <h2>1. Identification &amp; Scope</h2>
+        <p><strong>XDBF</strong> (Xbox Database Format) provides an indexed, append/free-list-managed blob store keyed by a <code>(Namespace, ID)</code> pair. On Xbox 360 it serves two closely linked roles:</p>
+        <ul>
+            <li><strong><code>.spa</code> (System / Title Service Package):</strong> Embedded inside a title's <a href="../../index.html#xbox360-xex" target="_top">XEX2</a> Resource Info table (under the 8-hex-character Title ID resource name). Stores static title definitions: achievement definitions, localized strings, icons, contexts, properties, and stats schemas.</li>
+            <li><strong><code>.gpd</code> (Game Profile Data):</strong> Stored inside the user's <code>CON </code> <a href="../../index.html#xbox360-stfs" target="_top">STFS</a> profile package. Each played title has a <code>&lt;TitleID&gt;.gpd</code> recording unlocked achievements, timestamps, settings, and Xbox LIVE sync cursors; the special dashboard file <code>FFFE07D1.gpd</code> tracks played titles, profile gamerpic/motto settings, and total gamerscore.</li>
+        </ul>
+        <p><strong>Endianness Detection Flag / Convention:</strong> Standard Xbox 360 XDBF files are <strong>Big-Endian</strong>, beginning with ASCII <code>"XDBF"</code> (<code>58 44 42 46</code>) and <code>Version = 0x00010000</code> (<code>00 01 00 00</code>). Little-Endian XDBF files (used by Windows SDK/authoring tools) store those same 32-bit header integers in Little-Endian, appearing on disk as <code>"FBDX"</code> (<code>46 42 44 58</code>) and <code>00 00 01 00</code>. Parsers must check the byte order of <code>Magic</code> and <code>Version</code> before decoding any table.</p>
+    </section>
+
+    <section id="layout" class="section">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>XDBF File Header (0x18 bytes at offset 0x00, BE or LE)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be|le</code></td><td><code>Magic</code></td><td><code>0x58444246</code> (<code>"XDBF"</code> BE; <code>"FBDX"</code> bytes when LE).</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32be|le</code></td><td><code>Version</code></td><td>Format version, expected <code>0x00010000</code> (v1.0).</td></tr>
+                    <tr><td><code>0x08</code></td><td>4</td><td><code>u32be|le</code></td><td><code>EntryTableLength</code></td><td>Allocated capacity of the Entry Table in <strong>slots</strong> (each 18 bytes).</td></tr>
+                    <tr><td><code>0x0C</code></td><td>4</td><td><code>u32be|le</code></td><td><code>EntryCount</code></td><td>Number of active entries currently populated in the Entry Table.</td></tr>
+                    <tr><td><code>0x10</code></td><td>4</td><td><code>u32be|le</code></td><td><code>FreeSpaceTableLength</code></td><td>Allocated capacity of the Free Space Table in <strong>slots</strong> (each 8 bytes).</td></tr>
+                    <tr><td><code>0x14</code></td><td>4</td><td><code>u32be|le</code></td><td><code>FreeSpaceTableCount</code></td><td>Number of active free-space records.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Entry Table Record (0x12 = 18 bytes per slot, starting at 0x18)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>2</td><td><code>u16be|le</code></td><td><code>Namespace</code></td><td>Namespace category ID (<code>1..6</code>).</td></tr>
+                    <tr><td><code>0x02</code></td><td>8</td><td><code>u64be|le</code></td><td><code>ID</code></td><td>Unique 64-bit resource identifier within <code>Namespace</code>.</td></tr>
+                    <tr><td><code>0x0A</code></td><td>4</td><td><code>u32be|le</code></td><td><code>OffsetSpecifier</code></td><td>Byte offset <strong>relative to <code>DataStart</code></strong> (not file start).</td></tr>
+                    <tr><td><code>0x0E</code></td><td>4</td><td><code>u32be|le</code></td><td><code>Length</code></td><td>Byte length of the payload blob.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Free Space Table Record (0x08 bytes per slot, starting at 0x18 + EntryTableLength * 18)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be|le</code></td><td><code>OffsetSpecifier</code></td><td>Byte offset <strong>relative to <code>DataStart</code></strong> of the unallocated region.</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32be|le</code></td><td><code>Length</code></td><td>Byte length of the free-space hole.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>GPD Achievement Entry Payload (Namespace 1, Big-Endian)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>StructSize</code></td><td>Fixed header size (<code>0x0000001C</code> = 28 bytes).</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32be</code></td><td><code>AchievementID</code></td><td>Achievement numeric ID matching <code>Entry.ID</code>.</td></tr>
+                    <tr><td><code>0x08</code></td><td>4</td><td><code>u32be</code></td><td><code>ImageID</code></td><td>ID of icon entry in Namespace 2 (<code>Images</code>).</td></tr>
+                    <tr><td><code>0x0C</code></td><td>4</td><td><code>u32be</code></td><td><code>Gamerscore</code></td><td>Point value awarded.</td></tr>
+                    <tr><td><code>0x10</code></td><td>4</td><td><code>u32be</code></td><td><code>Flags</code></td><td>Type bits (<code>0..2</code>), visibility/secret flag (<code>0x08</code>), unlocked offline (<code>0x20000</code>), unlocked online (<code>0x10000</code>).</td></tr>
+                    <tr><td><code>0x14</code></td><td>8</td><td><code>u64be</code></td><td><code>UnlockTime</code></td><td>Windows FILETIME (100-ns ticks since 1601-01-01 UTC; <code>0</code> if locked).</td></tr>
+                    <tr><td><code>0x1C</code></td><td>var</td><td><code>utf16be\0[3]</code></td><td><code>Strings</code></td><td>Three consecutive null-terminated UTF-16BE strings: <code>Name</code>, <code>UnlockedDescription</code>, <code>LockedDescription</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>GPD Setting Entry (Namespace 3) &amp; Title Entry (Namespace 4 in FFFE07D1.gpd)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>Setting.ID</code></td><td>Setting identifier (<code>0x10040001</code>..etc. or title-defined ID).</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32be</code></td><td><code>Setting.Reserved</code></td><td>Zero / unknown field.</td></tr>
+                    <tr><td><code>0x08</code></td><td>1</td><td><code>u8</code></td><td><code>Setting.DataType</code></td><td><code>0</code>=Context, <code>1</code>=Int32, <code>2</code>=Int64, <code>3</code>=Double, <code>4</code>=WString, <code>5</code>=Float, <code>6</code>=Binary, <code>7</code>=DateTime.</td></tr>
+                    <tr><td><code>0x09</code></td><td>7</td><td><code>u8[7]</code></td><td><code>Setting.Padding</code></td><td>Alignment padding before <code>0x10</code> value payload.</td></tr>
+                    <tr><td><code>0x10</code></td><td>var</td><td><code>union</code></td><td><code>Setting.Value</code></td><td>Inline 8-byte scalar/header, or <code>u32be Size</code> + <code>u32be Unknown</code> + variable bytes/UTF-16BE for WString/Binary.</td></tr>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>Title.TitleID</code></td><td>Played Title ID (in <code>FFFE07D1.gpd</code> Namespace 4).</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32be</code></td><td><code>Title.AchievementsPossible</code></td><td>Total achievement count for the title.</td></tr>
+                    <tr><td><code>0x08</code></td><td>4</td><td><code>u32be</code></td><td><code>Title.AchievementsEarned</code></td><td>Unlocked achievement count.</td></tr>
+                    <tr><td><code>0x0C</code></td><td>4</td><td><code>u32be</code></td><td><code>Title.GamerscoreTotal</code></td><td>Maximum gamerscore.</td></tr>
+                    <tr><td><code>0x10</code></td><td>4</td><td><code>u32be</code></td><td><code>Title.GamerscoreEarned</code></td><td>Earned gamerscore.</td></tr>
+                    <tr><td><code>0x14</code></td><td>4</td><td><code>u32be</code></td><td><code>Title.ReservedFlags</code></td><td>Achievement/avatar award sync counters.</td></tr>
+                    <tr><td><code>0x18</code></td><td>8</td><td><code>u32be[2]</code></td><td><code>Title.AwardsFlags</code></td><td>Avatar award counts/earned flags.</td></tr>
+                    <tr><td><code>0x20</code></td><td>8</td><td><code>u64be</code></td><td><code>Title.LastPlayed</code></td><td>Windows FILETIME timestamp.</td></tr>
+                    <tr><td><code>0x28</code></td><td>var</td><td><code>utf16be\0</code></td><td><code>Title.TitleName</code></td><td>Null-terminated UTF-16BE title name.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags" class="section">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>Data Offset Calculation</h3>
+        <p>The byte tables are pre-allocated with fixed capacity; active entries occupy only the leading slots, while the Data Region begins strictly after the <em>allocated capacity</em> of both tables:</p>
+        <pre><code>EntryTableOffset     = 0x18
+FreeSpaceTableOffset = 0x18 + (EntryTableLength * 18)
+DataStart            = 0x18 + (EntryTableLength * 18) + (FreeSpaceTableLength * 8)
+EntryFileOffset(i)   = DataStart + Entry[i].OffsetSpecifier</code></pre>
+
+        <h3>Standard XDBF Namespaces (1..6)</h3>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>XDBF Standard Namespaces</caption>
+                <thead>
+                    <tr><th>Namespace</th><th>GPD Usage</th><th>SPA Usage</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>1</code></td><td>Achievements (<code>AchievementEntry</code> + Sync records)</td><td>Metadata chunks (<code>XTHD</code>, <code>XACH</code>, <code>XCRP</code>, <code>XVC2</code>, <code>XPRP</code>, <code>XSTS</code>, <code>XMCH</code>)</td></tr>
+                    <tr><td><code>2</code></td><td>Images (PNG blobs: achievement/title icons)</td><td>Images (PNG blobs referenced by ID)</td></tr>
+                    <tr><td><code>3</code></td><td>Settings (<code>SettingEntry</code> + Sync records)</td><td>Context / Property / Settings metadata</td></tr>
+                    <tr><td><code>4</code></td><td>Titles (<code>TitleEntry</code> in <code>FFFE07D1.gpd</code> + Sync records)</td><td>Title / Schema data</td></tr>
+                    <tr><td><code>5</code></td><td>Strings (UTF-16BE localized strings)</td><td>String table chunk (<code>XSTR</code> localized tables)</td></tr>
+                    <tr><td><code>6</code></td><td>Avatar Awards / Security / Extended records</td><td>Avatar Awards / Extended service chunks</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>GPD Xbox LIVE Sync Records</h3>
+        <p>Within any synchronized <code>.gpd</code> namespace (typically Namespaces <code>1</code>, <code>3</code>, <code>4</code>, and <code>6</code>), two reserved 64-bit IDs manage delta synchronization with Xbox LIVE:</p>
+        <ul>
+            <li><strong>Sync List (<code>ID = 0x0000000100000000</code>):</strong> Array of 16-byte records <code>{ u64be EntryID, u64be SyncID }</code> mapping each local entry to its monotonic sync revision.</li>
+            <li><strong>Sync Data (<code>ID = 0x0000000200000000</code>):</strong> 24-byte header <code>{ u64be NextSyncID, u64be LastSyncID, u64be LastSyncTime }</code> tracking the high-water mark of the last successful server sync.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases" class="section">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>Capacity vs. Active Count:</strong> Never compute <code>DataStart</code> using <code>EntryCount</code> or <code>FreeSpaceTableCount</code>. Unused slots between <code>EntryCount</code> and <code>EntryTableLength</code> (and between <code>FreeSpaceTableCount</code> and <code>FreeSpaceTableLength</code>) are reserved space; <code>DataStart</code> always uses <code>EntryTableLength</code> and <code>FreeSpaceTableLength</code>.</li>
+            <li><strong>Relative Offsets:</strong> <code>OffsetSpecifier</code> in both the Entry Table and Free Space Table is relative to <code>DataStart</code>, not file offset <code>0x00</code>.</li>
+            <li><strong>Reserved Sync IDs in Namespace Enumeration:</strong> When enumerating achievements, settings, or titles in a <code>.gpd</code>, skip entries with <code>ID == 0x0000000100000000</code> or <code>0x0000000200000000</code> (or <code>ID == 0</code>), as these are sync control blocks rather than user records.</li>
+            <li><strong>Free-Space Hole Coalescing:</strong> Modifying or deleting entries in-place records freed byte ranges in the Free Space Table rather than compacting the Data Region immediately. Parsers reading unmodified entries ignore the Free Space Table, while writers must allocate from best-fit holes or append to <code>DataEnd</code>.</li>
+            <li><strong><code>.spa</code> vs. <code>.gpd</code> Payload Format:</strong> Inside <code>.spa</code> files, Namespace 1 and Namespace 5 blobs are structured chunks beginning with 4-byte ASCII tags (e.g., <code>XTHD</code>, <code>XACH</code>, <code>XSTR</code>) and version/size headers, whereas <code>.gpd</code> files store raw binary achievement/setting/title records directly.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode" class="section">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function ParseXdbf(stream):
+    magicBytes = stream.ReadBytes(0x00, 4)
+    if magicBytes == "XDBF":
+        endian = "BE"
+    elif magicBytes == "FBDX":
+        endian = "LE"
+    else:
+        raise InvalidXdbfMagic
+
+    ReadU16 = (endian == "BE") ? stream.ReadU16BE : stream.ReadU16LE
+    ReadU32 = (endian == "BE") ? stream.ReadU32BE : stream.ReadU32LE
+    ReadU64 = (endian == "BE") ? stream.ReadU64BE : stream.ReadU64LE
+
+    version = ReadU32(0x04)
+    assert version == 0x00010000
+
+    entryTableLen = ReadU32(0x08)
+    entryCount    = ReadU32(0x0C)
+    freeTableLen  = ReadU32(0x10)
+    freeCount     = ReadU32(0x14)
+
+    assert entryCount &lt;= entryTableLen and freeCount &lt;= freeTableLen
+
+    entryOffset = 0x18
+    freeOffset  = 0x18 + entryTableLen * 18
+    dataStart   = freeOffset + freeTableLen * 8
+
+    entries = []
+    for i in 0 .. entryCount - 1:
+        pos = entryOffset + i * 18
+        ns     = ReadU16(pos + 0x00)
+        id     = ReadU64(pos + 0x02)
+        relOff = ReadU32(pos + 0x0A)
+        length = ReadU32(pos + 0x0E)
+        payload = stream.ReadBytes(dataStart + relOff, length)
+        entries.append({ Namespace: ns, ID: id, Offset: dataStart + relOff, Length: length, Data: payload })
+
+    freeSpaces = []
+    for i in 0 .. freeCount - 1:
+        pos = freeOffset + i * 8
+        freeSpaces.append({ Offset: dataStart + ReadU32(pos), Length: ReadU32(pos + 4) })
+
+    return { Endianness: endian, Entries: entries, FreeSpaces: freeSpaces }</code></pre>
+    </section>
+
+    <section id="provenance" class="section">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn">
+            <p><strong>Profile &amp; Achievement Integrity Caveat:</strong> <code>.gpd</code> files do not carry an internal cryptographic signature of their own; their integrity and offline/online unlock trust are enforced by the enclosing <code>CON </code> <a href="../../index.html#xbox360-stfs" target="_top">STFS</a> signature and Xbox LIVE server synchronization. Do not expect standalone <code>.gpd</code> edits to pass console verification without valid STFS container re-signing.</p>
+        </aside>
+        <ul>
+            <li><strong>High Confidence (Confirmed Layout):</strong> The 24-byte header, 18-byte Entry Table, 8-byte Free Space Table, relative <code>OffsetSpecifier</code> addressing, and Namespaces <code>1..6</code> are consistently observed across <code>.spa</code> resources inside XEX2 binaries and <code>.gpd</code> files in retail profiles.</li>
+            <li><strong>Sync &amp; Extended Setting Variants:</strong> Specific <code>Setting.ID</code> constants and newer avatar award fields in Namespace 6 vary across dashboard kernel generations.</li>
+        </ul>
+    </section>
+</body>
+</html>

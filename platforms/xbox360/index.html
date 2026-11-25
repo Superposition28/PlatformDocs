@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Xbox 360 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><span>Xbox 360</span></nav>
+
+    <h1>Xbox 360 Platform Formats</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">Microsoft Xenon · PowerPC 64-bit BE (32-bit Pointer Mode)</p>
+        <p>Platform-inherited executable, package, metadata database, and optical disc specifications for the Microsoft Xbox 360 console ecosystem. Every specification here covers system-level containers and firmware/OS interfaces defined by the Xbox 360 kernel, hypervisor, and dashboard—independent of any specific title or game engine.</p>
+        <dl>
+            <dt>CPU Architecture</dt>
+            <dd>IBM Xenon tri-core PowerPC 64-bit (Big-Endian, VMX-128), executing user-mode titles in 32-bit effective address (pointer) mode</dd>
+            <dt>Privilege Stack</dt>
+            <dd>1BL ROM &rarr; Bootloaders (2BL–4BL) &rarr; Hypervisor (real-mode security monitor) &rarr; Kernel (<code>xboxkrnl.exe</code>) &rarr; System Manager (<code>xam.xex</code>)</dd>
+            <dt>Primary Media</dt>
+            <dd>XGD2 / XGD3 dual-layer optical discs (XDVDFS) and signed STFS / SVOD storage containers</dd>
+            <dt>Core Formats</dt>
+            <dd>4 platform specifications (<code>.xex</code>, STFS, XDBF / <code>.gpd</code> / <code>.spa</code>, XGD2/XGD3 ISO)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#architecture">1. Hardware &amp; OS Architecture</a></li>
+            <li><a href="#formats">2. Format Index</a></li>
+            <li><a href="#ecosystem">3. Boot, Disc &amp; Package Ecosystem</a></li>
+            <li><a href="#endianness">4. Hybrid Endianness Notes</a></li>
+        </ul>
+    </nav>
+
+    <section id="architecture" class="section">
+        <h2>1. Hardware &amp; OS Architecture</h2>
+        <p>The Xbox 360 (codename <em>Xenon</em>) combines a 3-core, 6-hardware-thread 3.2 GHz PowerPC 64-bit processor with 512 MB of unified GDDR3 memory and a unified-shader GPU (<em>Xenos</em>). While the processor executes 64-bit PowerPC instructions and supports 64-bit integer/VMX-128 operations, the Xbox 360 runtime ABI operates in <strong>32-bit pointer mode</strong>: virtual addresses, PE32 image bases (typically <code>0x82000000</code> for title executables), and kernel import thunks are 32-bit values.</p>
+        <ul>
+            <li><strong>Hypervisor (<code>hv</code>):</strong> Runs at highest privilege in real-mode memory. Enforces encrypted/hashed physical page descriptors from XEX2 images, manages RSA/AES key vaults, and exposes hardware security services through the <code>sc</code> syscall interface.</li>
+            <li><strong>Kernel (<code>xboxkrnl.exe</code>):</strong> NT-derived microkernel managing threads, virtual memory (4 KB, 64 KB, and 16 MB pages), optical/HDD block devices, XDVDFS/FATX filesystems, and ordinal-based system imports.</li>
+            <li><strong>Xbox Application Manager (<code>xam.xex</code>):</strong> System module providing dashboard services, user profiles, achievements, Xbox LIVE licensing, STFS package mounting, and XDBF profile/title database synchronization.</li>
+        </ul>
+    </section>
+
+    <section id="formats" class="section">
+        <h2>2. Format Index</h2>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Xbox 360 Platform Format Specifications</caption>
+                <thead>
+                    <tr>
+                        <th>Format</th>
+                        <th>Route</th>
+                        <th>Magic / Identifier</th>
+                        <th>Endianness</th>
+                        <th>Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><a href="../../index.html#xbox360-xex" target="_top"><code>.xex</code> (XEX2 / XEX1)</a></td>
+                        <td><code>#xbox360-xex</code></td>
+                        <td><code>XEX2</code> / <code>XEX1</code></td>
+                        <td>BE wrapper + LE PE32 + BE PPC32</td>
+                        <td>Signed/encrypted executable and DLL container wrapping a PE32/PPC32 image.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#xbox360-stfs" target="_top">STFS Package</a></td>
+                        <td><code>#xbox360-stfs</code></td>
+                        <td><code>CON </code> / <code>PIRS</code> / <code>LIVE</code></td>
+                        <td>BE header + mixed LE/BE tables</td>
+                        <td>Hash-tree virtual filesystem for saves, profiles, DLC, XBLA, and title updates.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#xbox360-xdbf" target="_top">XDBF (<code>.gpd</code> / <code>.spa</code>)</a></td>
+                        <td><code>#xbox360-xdbf</code></td>
+                        <td><code>XDBF</code> (<code>0x58444246</code>)</td>
+                        <td>Flagged BE (native) / LE (tools)</td>
+                        <td>Indexed resource database for title metadata, achievements, strings, images, and profile sync.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#xbox360-xgd-iso" target="_top">XGD2 / XGD3 ISO</a></td>
+                        <td><code>#xbox360-xgd-iso</code></td>
+                        <td><code>MICROSOFT*XBOX*MEDIA</code></td>
+                        <td>LE XDVDFS + BE security fields</td>
+                        <td>Optical disc partitioning (Video, SystemUpdate, Game XDVDFS) and PFI/DMI/SS sectors.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="ecosystem" class="section">
+        <h2>3. Boot, Disc &amp; Package Ecosystem</h2>
+        <p>Retail and development software reaches the console kernel through two primary distribution containers, both converging on XEX2 execution and XDBF metadata:</p>
+        <div class="relationship-flow">
+            <ul>
+                <li><strong>Optical Disc Path:</strong> <a href="../../index.html#xbox360-xgd-iso" target="_top">XGD2 / XGD3 Optical Disc</a> &rarr; Drive validates PFI/DMI/SS security sectors &rarr; Kernel mounts XDVDFS game partition (<code>+0x10000</code>) &rarr; Loads root <code>default.xex</code> (<a href="../../index.html#xbox360-xex" target="_top">XEX2</a>).</li>
+                <li><strong>Digital / HDD / MU Path:</strong> <a href="../../index.html#xbox360-stfs" target="_top">STFS Container</a> (<code>CON </code>, <code>PIRS</code>, <code>LIVE</code>) on FATX storage &rarr; Kernel/Xam verifies RSA signature &amp; L0/L1/L2 SHA-1 hash tree &rarr; Exposes inner <code>default.xex</code>, DLC archives, or profile <a href="../../index.html#xbox360-xdbf" target="_top"><code>.gpd</code></a> files.</li>
+                <li><strong>Metadata &amp; Profile Path:</strong> <a href="../../index.html#xbox360-xex" target="_top">XEX2</a> resource section embeds a <code>.spa</code> (<a href="../../index.html#xbox360-xdbf" target="_top">XDBF</a>) package describing achievements, localized strings, and icons; <code>xam.xex</code> projects those definitions into the user profile's per-title <code>.gpd</code> inside a <code>CON </code> STFS package.</li>
+            </ul>
+        </div>
+    </section>
+
+    <section id="endianness" class="section">
+        <h2>4. Hybrid Endianness Notes</h2>
+        <p>Unlike pure big-endian or pure little-endian consoles, Xbox 360 platform formats consistently mix byte orders because Microsoft adapted x86/PC specifications (PE/COFF, XDVDFS, FAT timestamps) onto a big-endian PowerPC host:</p>
+        <ul>
+            <li><strong>XEX2:</strong> Big-endian container headers, optional header directory, security info, and PPC32 machine code—wrapping Little-Endian DOS/NT/PE32/Section headers.</li>
+            <li><strong>STFS:</strong> Predominantly Big-Endian metadata and hash next-pointers (<code>u24be</code>), combined with Little-Endian volume descriptor block counts/indices (<code>u16le</code>, <code>u24le</code>) and Little-Endian <code>u24le</code> block fields inside file entries.</li>
+            <li><strong>XDBF:</strong> Native console <code>.spa</code> and <code>.gpd</code> files use Big-Endian <code>XDBF</code> headers and payloads, while PC SDK/tooling variants use Little-Endian byte order indicated by the magic/version byte order.</li>
+            <li><strong>XGD / XDVDFS:</strong> Little-Endian XDVDFS volume descriptors and binary-search-tree directory nodes paired with Big-Endian DVD-ROM physical/security descriptors.</li>
+        </ul>
+    </section>
+</body>
+</html>

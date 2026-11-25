@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Game Boy Advance — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><span>Game Boy Advance</span>
+    </nav>
+
+    <h1>Game Boy Advance (AGB) Architecture &amp; Platform Formats</h1>
+
+    <section class="format-summary" aria-label="Platform summary">
+        <p class="eyebrow">Platform Overview &middot; Nintendo Game Boy Advance (ARM7TDMI)</p>
+        <p>The Game Boy Advance (hardware model <code>AGB</code>) is a 32-bit handheld built around an <strong>ARM7TDMI</strong> CPU (ARMv4T instruction set, supporting 32-bit ARM and 16-bit Thumb states) clocked at <code>16.777216 MHz</code> (<code>2^24 Hz</code>). System buses are little-endian across CPU memory, Game Pak ROM/backup windows, and built-in BIOS decompression streams.</p>
+        <dl>
+            <dt>CPU Core</dt>
+            <dd>ARM7TDMI (ARMv4T, 32-bit ARM / 16-bit Thumb) @ <code>16.777216 MHz</code></dd>
+            <dt>Endianness</dt>
+            <dd>Little-Endian (32-bit/16-bit/8-bit data paths; certain BIOS compression tokens pack big-endian 16-bit bitfields)</dd>
+            <dt>Boot Targets</dt>
+            <dd>Game Pak ROM at <code>0x08000000</code> (cartridge boot) or EWRAM at <code>0x02000000</code> (Multiboot / JoyBus)</dd>
+            <dt>BIOS ROM</dt>
+            <dd>16 KiB internal system ROM at <code>0x00000000&ndash;0x00003FFF</code> providing boot verification, Multiboot, and SWI decompression</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#formats">Platform-Inherited Format Index</a></li>
+            <li><a href="#memory-map">Physical Memory Map</a></li>
+            <li><a href="#rom-waitstates">ROM Mapping &amp; WAITCNT Timings</a></li>
+            <li><a href="#boot-dispatch">BIOS Boot &amp; Execution Dispatch</a></li>
+        </ul>
+    </nav>
+
+    <section id="formats">
+        <h2>Platform-Inherited Format Index</h2>
+        <p>Only formats inherited from the GBA hardware, BIOS, Link/JoyBus protocols, and official SDK save conventions are documented here. Each specification opens inside the top-level documentation shell.</p>
+        <div class="table-scroll" role="region" aria-label="GBA format index" tabindex="0">
+            <table class="format-counts">
+                <caption>Game Boy Advance Platform-Inherited Formats</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Format / Subsystem</th>
+                        <th scope="col">Canonical Files / Scope</th>
+                        <th scope="col">Confidence</th>
+                        <th scope="col">Summary</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><a href="../../index.html#gba-gba-rom" target="_top">.gba Cartridge ROM Header</a></td>
+                        <td><code>*.gba</code>, <code>*.agb</code>, <code>*.bin</code></td>
+                        <td><span class="badge confidence-confirmed">Confirmed</span></td>
+                        <td>192-byte cartridge header (<code>0x000&ndash;0x0BF</code>), ARM branch entrypoint, 156-byte Nintendo Logo bitmap, game/maker codes, and complement check (<code>0x0BD</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#gba-multiboot" target="_top">.mb Multiboot &amp; Link/JoyBus</a></td>
+                        <td><code>*.mb</code>, EWRAM payloads</td>
+                        <td><span class="badge confidence-confirmed">Confirmed</span></td>
+                        <td>Extended multiboot header (<code>0x0C0&ndash;0x0E3</code>), BIOS <code>SWI 0x25</code> <code>MultiBootParam</code> block, Normal/MultiPlay encryption &amp; CRC16, and JoyBus commands.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#gba-bios-save" target="_top">BIOS SWI Compression &amp; Save Media IDs</a></td>
+                        <td>Embedded ROM streams &amp; SDK IDs</td>
+                        <td><span class="badge confidence-confirmed">Confirmed</span></td>
+                        <td>BIOS SWI <code>0x10&ndash;0x18</code> headers (LZ77 <code>0x10</code>, Huffman <code>0x20</code>, RLE <code>0x30</code>, Diff <code>0x8x</code>, BitUnPack) and word-aligned cartridge save ID strings.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="memory-map">
+        <h2>Physical Memory Map</h2>
+        <p>The ARM7TDMI has no MMU; all addresses are physical 32-bit addresses. Bus widths and waitstates vary sharply across regions, making IWRAM (32-bit, 0-wait) critical for ARM code and interrupt handlers, while EWRAM and Game Pak ROM share 16-bit buses.</p>
+        <div class="table-scroll" role="region" aria-label="GBA memory map" tabindex="0">
+            <table class="format-counts">
+                <caption>Game Boy Advance Memory Regions (32-Bit Physical Address Space)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Address Range</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Bus Width</th>
+                        <th scope="col">Default Waitstates</th>
+                        <th scope="col">Region &amp; Platform Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00000000&ndash;0x00003FFF</code></td>
+                        <td>16 KiB</td>
+                        <td>32-bit</td>
+                        <td>0</td>
+                        <td><strong>System ROM (BIOS):</strong> Boot verification, SWI handlers, IRQ entry stub. Read-protected when PC &ge; <code>0x04000000</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02000000&ndash;0x0203FFFF</code></td>
+                        <td>256 KiB</td>
+                        <td>16-bit</td>
+                        <td>2 (3 cycles/16-bit)</td>
+                        <td><strong>On-Board WRAM (EWRAM):</strong> External work RAM; primary load target for Multiboot images (mirrored every <code>0x40000</code> bytes up to <code>0x02FFFFFF</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x03000000&ndash;0x03007FFF</code></td>
+                        <td>32 KiB</td>
+                        <td>32-bit</td>
+                        <td>0 (1 cycle)</td>
+                        <td><strong>On-Chip WRAM (IWRAM):</strong> Fast internal RAM; holds BIOS/user stacks and IRQ vector pointer at <code>0x03007FFC</code> (mirrored every <code>0x8000</code> up to <code>0x03FFFFFF</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04000000&ndash;0x040003FE</code></td>
+                        <td>~1 KiB</td>
+                        <td>16/32-bit</td>
+                        <td>0</td>
+                        <td><strong>I/O Registers:</strong> LCD, Sound, DMA, Timers, SIO/Link, Keypad, Interrupts, and Waitstate Control (<code>WAITCNT</code> at <code>0x04000204</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x05000000&ndash;0x050003FF</code></td>
+                        <td>1 KiB</td>
+                        <td>16-bit</td>
+                        <td>0 (+1 on 32-bit)</td>
+                        <td><strong>Palette RAM:</strong> 512 bytes BG palette + 512 bytes OBJ palette (15-bit RGB555 entries).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x06000000&ndash;0x06017FFF</code></td>
+                        <td>96 KiB</td>
+                        <td>16-bit</td>
+                        <td>0 (+1 on 32-bit)</td>
+                        <td><strong>VRAM:</strong> Tile/bitmap/map video memory. Does not support 8-bit byte writes (8-bit writes duplicate the byte across the halfword).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x07000000&ndash;0x070003FF</code></td>
+                        <td>1 KiB</td>
+                        <td>32-bit</td>
+                        <td>0</td>
+                        <td><strong>OAM:</strong> 128 object attribute entries (8 bytes each) interleaved with 32 affine matrices.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08000000&ndash;0x09FFFFFF</code></td>
+                        <td>32 MiB</td>
+                        <td>16-bit</td>
+                        <td>4 N / 2 S (default)</td>
+                        <td><strong>Game Pak ROM (Wait State 0):</strong> Primary cartridge ROM mapping. Sequentially incremented addresses use S-cycles.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0A000000&ndash;0x0BFFFFFF</code></td>
+                        <td>32 MiB</td>
+                        <td>16-bit</td>
+                        <td>4 N / 4 S (default)</td>
+                        <td><strong>Game Pak ROM (Wait State 1):</strong> Hardware mirror of cartridge ROM with independent WS1 timing bits.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C000000&ndash;0x0DFFFFFF</code></td>
+                        <td>32 MiB</td>
+                        <td>16-bit</td>
+                        <td>4 N / 8 S (default)</td>
+                        <td><strong>Game Pak ROM (Wait State 2) / EEPROM:</strong> Hardware mirror of cartridge ROM; upper region (<code>0x0D000000&ndash;0x0DFFFFFF</code>, or <code>0x0DFFFF00&ndash;0x0DFFFFFF</code> for &gt;16 MiB ROMs) maps serial EEPROM when present.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0E000000&ndash;0x0E00FFFF</code></td>
+                        <td>64 KiB</td>
+                        <td>8-bit</td>
+                        <td>4 (default)</td>
+                        <td><strong>Game Pak SRAM / Flash:</strong> 8-bit external backup bus. 64 KiB direct window; 128 KiB Flash uses bank-switching commands.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="rom-waitstates">
+        <h2>ROM Mapping &amp; <code>WAITCNT</code> (<code>0x04000204</code>) Timings</h2>
+        <p>Game Pak ROM is presented as a single contiguous 32 MiB aperture mirrored across three waitstate windows (WS0 at <code>0x08000000</code>, WS1 at <code>0x0A000000</code>, WS2 at <code>0x0C000000</code>). On power-up, <code>REG_WAITCNT</code> (<code>0x04000204</code>, <code>u16le</code>) initializes to <code>0x0000</code>. Actual bus access duration is <code>1 + waitstates</code> CPU cycles per 16-bit halfword (32-bit reads issue two consecutive 16-bit accesses: one non-sequential N-cycle plus one sequential S-cycle).</p>
+        <div class="table-scroll" role="region" aria-label="WAITCNT register layout" tabindex="0">
+            <table class="format-counts">
+                <caption>REG_WAITCNT (0x04000204, u16le) Bitfields</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Bits</th>
+                        <th scope="col">Width</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Encoded Values &amp; Semantics</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0..1</code></td>
+                        <td>2 bits</td>
+                        <td>u16le</td>
+                        <td>SRAM Wait Control</td>
+                        <td><code>0</code> = 4, <code>1</code> = 3, <code>2</code> = 2, <code>3</code> = 8 wait cycles (8 cycles recommended for SRAM/Flash).</td>
+                    </tr>
+                    <tr>
+                        <td><code>2..3</code></td>
+                        <td>2 bits</td>
+                        <td>u16le</td>
+                        <td>WS0 First Access (N)</td>
+                        <td>Wait cycles for first access in <code>0x08000000</code>: <code>0</code> = 4, <code>1</code> = 3, <code>2</code> = 2, <code>3</code> = 8.</td>
+                    </tr>
+                    <tr>
+                        <td><code>4</code></td>
+                        <td>1 bit</td>
+                        <td>u16le</td>
+                        <td>WS0 Second Access (S)</td>
+                        <td>Sequential wait cycles in <code>0x08000000</code>: <code>0</code> = 2, <code>1</code> = 1.</td>
+                    </tr>
+                    <tr>
+                        <td><code>5..6</code></td>
+                        <td>2 bits</td>
+                        <td>u16le</td>
+                        <td>WS1 First Access (N)</td>
+                        <td>Wait cycles for first access in <code>0x0A000000</code>: <code>0</code> = 4, <code>1</code> = 3, <code>2</code> = 2, <code>3</code> = 8.</td>
+                    </tr>
+                    <tr>
+                        <td><code>7</code></td>
+                        <td>1 bit</td>
+                        <td>u16le</td>
+                        <td>WS1 Second Access (S)</td>
+                        <td>Sequential wait cycles in <code>0x0A000000</code>: <code>0</code> = 4, <code>1</code> = 1.</td>
+                    </tr>
+                    <tr>
+                        <td><code>8..9</code></td>
+                        <td>2 bits</td>
+                        <td>u16le</td>
+                        <td>WS2 First Access (N)</td>
+                        <td>Wait cycles for first access in <code>0x0C000000</code>: <code>0</code> = 4, <code>1</code> = 3, <code>2</code> = 2, <code>3</code> = 8.</td>
+                    </tr>
+                    <tr>
+                        <td><code>10</code></td>
+                        <td>1 bit</td>
+                        <td>u16le</td>
+                        <td>WS2 Second Access (S)</td>
+                        <td>Sequential wait cycles in <code>0x0C000000</code>: <code>0</code> = 8, <code>1</code> = 1.</td>
+                    </tr>
+                    <tr>
+                        <td><code>11..12</code></td>
+                        <td>2 bits</td>
+                        <td>u16le</td>
+                        <td>PHI Terminal Output</td>
+                        <td>Cartridge pin clock output: <code>0</code> = Disable, <code>1</code> = 4.19 MHz, <code>2</code> = 8.38 MHz, <code>3</code> = 16.78 MHz.</td>
+                    </tr>
+                    <tr>
+                        <td><code>13</code></td>
+                        <td>1 bit</td>
+                        <td>u16le</td>
+                        <td>Reserved</td>
+                        <td>Unused (write <code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>14</code></td>
+                        <td>1 bit</td>
+                        <td>u16le</td>
+                        <td>Game Pak Prefetch Buffer</td>
+                        <td><code>0</code> = Disable, <code>1</code> = Enable 8-halfword ROM instruction prefetch FIFO when CPU is not accessing Game Pak bus.</td>
+                    </tr>
+                    <tr>
+                        <td><code>15</code></td>
+                        <td>1 bit</td>
+                        <td>u16le</td>
+                        <td>Game Pak Type Flag</td>
+                        <td>Read-only hardware pin status: <code>0</code> = GBA cartridge, <code>1</code> = CGB cartridge (IN35 grounded).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="boot-dispatch">
+        <h2>BIOS Boot &amp; Execution Dispatch</h2>
+        <p>On cold reset, the ARM7TDMI executes from the internal BIOS at <code>0x00000000</code>. The BIOS initializes registers, plays the boot logo sequence, and selects a boot target according to hardware state and link activity:</p>
+        <ul>
+            <li><strong>Cartridge Boot (<code>0x08000000</code>):</strong> If a cartridge is present (and <code>START+SELECT</code> is not held to force slave download), the BIOS validates the 156-byte Nintendo Logo at <code>0x08000004&ndash;0x0800009F</code>, verifies fixed byte <code>0x080000B2 == 0x96</code>, and checks the complement checksum at <code>0x080000BD</code> over <code>0x0A0..0x0BC</code>. On success, it clears memory/registers and branches to <code>0x08000000</code>.</li>
+            <li><strong>Multiboot / JoyBus Boot (<code>0x02000000</code>):</strong> If no valid cartridge boots (or the user forces download mode), the BIOS listens on the serial link port for either Link Cable Multiboot (Normal/MultiPlay) or JoyBus packets, writes the received image to EWRAM starting at <code>0x02000000</code>, validates the header and transfer CRC16, stamps boot mode/client ID into <code>0x020000C4&ndash;0x020000C5</code>, and branches to <code>0x020000C0</code> (Normal/MultiPlay) or <code>0x020000E0</code> (JoyBus).</li>
+            <li><strong>Soft Reset (<code>SWI 0x00</code>):</strong> Reads the 8-bit flag at <code>0x03007FFA</code>: zero branches to cartridge ROM <code>0x08000000</code>; non-zero branches to EWRAM Multiboot entrypoint <code>0x02000000</code>.</li>
+        </ul>
+    </section>
+</body>
+</html>

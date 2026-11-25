@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>UMD ISO-9660 Layout, UMD_DATA.BIN &amp; CSO/DAX — PlayStation Portable — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#psp" target="_top">PlayStation Portable</a>
+        <span>/</span>
+        <span>UMD ISO-9660 &amp; CSO/DAX Containers</span>
+    </nav>
+
+    <h1>UMD ISO-9660 Directory Layout, UMD_DATA.BIN &amp; Standard Compressed Image Containers (CSO/CISO &amp; DAX)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">PSP Optical Disc &amp; Preservation Containers · Little-Endian</p>
+        <p>Retail PSP UMD discs use a standard 2048-byte-sector ISO-9660 filesystem (<code>disc0:/</code>) containing <code>/UMD_DATA.BIN</code> and the <code>/PSP_GAME/</code> tree (metadata, XMB assets, <code>SYSDIR/EBOOT.BIN</code>, optional <code>UPDATE/</code>). For archival and virtual-disc mounting, two standard sector-compressed container formats wrap the raw ISO-9660 stream: <code>CSO</code> (<code>CISO</code>) and <code>DAX</code>.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.iso</code>, <code>UMD_DATA.BIN</code>, <code>PSP_GAME/SYSDIR/EBOOT.BIN</code>, <code>BOOT.BIN</code>, <code>OPNSSMP.BIN</code>, <code>UPDATE/</code>, <code>*.cso</code>, <code>*.dax</code></dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>01 43 44 30 30 31</code> (<code>\x01CD001</code> at <code>0x8000</code>); <code>43 49 53 4F</code> (<code>"CISO"</code>); <code>44 41 58 00</code> (<code>"DAX\x00"</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (<code>u16le</code>, <code>u32le</code>, <code>u64le</code>; ISO-9660 carries standard dual-endian fields)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PSP UMD optical media (<code>disc0:/</code>) &amp; standard compressed UMD image containers</dd>
+            <dt>Role/MIME</dt>
+            <dd>Optical disc image &amp; block-compressed disc containers (<code>application/x-iso9660-image</code>, <code>application/x-psp-cso</code>, <code>application/x-psp-dax</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout &amp; Directory Tree</a></li>
+            <li><a href="#flags">3. Flags, Block Index &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification" class="section">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>A raw UMD dump is a 2048-byte-per-sector ISO-9660 image identified by the Primary Volume Descriptor (PVD) signature <code>01 43 44 30 30 31</code> (<code>\x01CD001</code>) at sector 16 (byte offset <code>0x8000</code>). Single-layer UMDs cap around 900 MB and dual-layer UMDs around 1.8 GB.</p>
+        <p>Compressed UMD containers store random-access compressed chunks of that raw ISO stream: <strong>CSO/CISO</strong> begins with <code>43 49 53 4F</code> (<code>"CISO"</code>) and compresses 2048-byte blocks (default), while <strong>DAX</strong> begins with <code>44 41 58 00</code> (<code>"DAX\x00"</code>) and compresses 8192-byte (<code>0x2000</code>) frames.</p>
+    </section>
+
+    <section id="layout" class="section">
+        <h2>2. Binary Layout &amp; Directory Tree</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Standard PSP UMD ISO-9660 Directory Tree</caption>
+                <thead>
+                    <tr>
+                        <th>Path</th>
+                        <th>Type</th>
+                        <th>Required</th>
+                        <th>Role</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>/UMD_DATA.BIN</code></td>
+                        <td>ASCII Descriptor</td>
+                        <td>Yes</td>
+                        <td>Disc ID &amp; Flags</td>
+                        <td>Pipe-delimited disc identifier string (typically <code>&lt;DISC-ID&gt;|&lt;16-hex-digest&gt;|&lt;disc_flags&gt;|&lt;type&gt;</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/PARAM.SFO</code></td>
+                        <td>PSF Table</td>
+                        <td>Yes</td>
+                        <td>XMB Metadata</td>
+                        <td><a href="../../index.html#psp-param-sfo" target="_top"><code>PARAM.SFO</code></a> with <code>CATEGORY="UG"</code>, <code>DISC_ID</code>, <code>PSP_SYSTEM_VER</code>, and <code>TITLE</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/ICON0.PNG</code></td>
+                        <td>PNG (144x80)</td>
+                        <td>Standard</td>
+                        <td>XMB Icon</td>
+                        <td>Static icon shown in the XMB UMD slot</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/ICON1.PMF</code></td>
+                        <td>PMF Video</td>
+                        <td>Optional</td>
+                        <td>XMB Motion Icon</td>
+                        <td>Animated MPEG-4 AVC loop played when the UMD icon is highlighted</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/PIC0.PNG</code></td>
+                        <td>PNG (310x180)</td>
+                        <td>Optional</td>
+                        <td>XMB Overlay</td>
+                        <td>Secondary info overlay graphic</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/PIC1.PNG</code></td>
+                        <td>PNG (480x272)</td>
+                        <td>Optional</td>
+                        <td>XMB Background</td>
+                        <td>Full-screen XMB background wallpaper</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/SND0.AT3</code></td>
+                        <td>ATRAC3 RIFF</td>
+                        <td>Optional</td>
+                        <td>XMB Audio</td>
+                        <td>Background music loop on the XMB</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/SYSDIR/EBOOT.BIN</code></td>
+                        <td><code>~PSP</code> PRX</td>
+                        <td>Yes (Retail)</td>
+                        <td>Boot Executable</td>
+                        <td>Encrypted/signed <a href="../../index.html#psp-prx-elf" target="_top"><code>~PSP</code> executable</a> launched by retail firmware</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/SYSDIR/BOOT.BIN</code></td>
+                        <td>ELF32 / Stub</td>
+                        <td>Mastering</td>
+                        <td>Unencrypted ELF</td>
+                        <td>Plain ELF32-MIPS executable on devkit masters; zeroed or stubbed on retail discs</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/SYSDIR/OPNSSMP.BIN</code></td>
+                        <td>Binary</td>
+                        <td>Optional</td>
+                        <td>DRM / Sample Module</td>
+                        <td>Optional Sony OpenMG / system security module on select discs</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/SYSDIR/UPDATE/</code></td>
+                        <td>Directory</td>
+                        <td>Optional</td>
+                        <td>Firmware Updater</td>
+                        <td>Contains <code>EBOOT.PBP</code> and <code>PARAM.SFO</code> for required system software update</td>
+                    </tr>
+                    <tr>
+                        <td><code>/PSP_GAME/USRDIR/</code></td>
+                        <td>Directory</td>
+                        <td>Yes</td>
+                        <td>Application Data</td>
+                        <td>Title-owned data files (contents excluded from platform format scope)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>CISO / CSO Header Layout (24 / 0x18 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u8[4]</code></td>
+                        <td><code>magic</code></td>
+                        <td>Constant signature <code>43 49 53 4F</code> (<code>"CISO"</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>header_size</code></td>
+                        <td>Header byte size (<code>0x00000018</code> = 24; early encoders sometimes wrote <code>0</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>8</td>
+                        <td><code>u64le</code></td>
+                        <td><code>total_bytes</code></td>
+                        <td>Total uncompressed ISO size in bytes</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>block_size</code></td>
+                        <td>Uncompressed sector/block size in bytes (typically <code>0x0800</code> = 2048)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>version</code></td>
+                        <td>Format version (<code>1</code> for CISO v1; <code>2</code> for CISO v2)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x15</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>align</code></td>
+                        <td>Bit-shift alignment factor applied to block index offsets (<code>offset = (idx &amp; 0x7FFFFFFF) &lt;&lt; align</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x16</code></td>
+                        <td>2</td>
+                        <td><code>u8[2]</code></td>
+                        <td><code>reserved</code></td>
+                        <td>Reserved padding bytes (<code>00 00</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td><code>(N+1)*4</code></td>
+                        <td><code>u32le[N+1]</code></td>
+                        <td><code>block_index</code></td>
+                        <td>Block offset table where <code>N = ceil(total_bytes / block_size)</code>; final <code>block_index[N]</code> marks end of last block</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>DAX Header Layout (32 / 0x20 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u8[4]</code></td>
+                        <td><code>magic</code></td>
+                        <td>Constant signature <code>44 41 58 00</code> (<code>"DAX\x00"</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>orig_size</code></td>
+                        <td>Total uncompressed ISO size in bytes</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>version</code></td>
+                        <td>Format version (<code>0</code> = standard; <code>1</code> = supports NC uncompressed frame ranges)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>nc_areas</code></td>
+                        <td>Count of 8-byte non-compressed (<code>NC</code>) frame range records</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>16</td>
+                        <td><code>u32le[4]</code></td>
+                        <td><code>reserved</code></td>
+                        <td>Reserved zero-filled header words</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td><code>M * 4</code></td>
+                        <td><code>u32le[M]</code></td>
+                        <td><code>frame_offsets</code></td>
+                        <td>Absolute offsets of <code>M = ceil(orig_size / 0x2000)</code> frames</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20 + M*4</code></td>
+                        <td><code>M * 2</code></td>
+                        <td><code>u16le[M]</code></td>
+                        <td><code>frame_sizes</code></td>
+                        <td>Compressed byte size of each 8192-byte frame</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20 + M*6</code></td>
+                        <td><code>nc_areas*8</code></td>
+                        <td><code>{u32le,u32le}[]</code></td>
+                        <td><code>nc_area_table</code></td>
+                        <td>Optional array of <code>(start_frame, end_frame)</code> pairs stored uncompressed (8192 bytes raw)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags" class="section">
+        <h2>3. Flags, Block Index &amp; Decoding Formulas</h2>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>CISO &amp; DAX Block Decoding Formulas</caption>
+                <thead>
+                    <tr>
+                        <th>Container</th>
+                        <th>Field / Bit</th>
+                        <th>Type</th>
+                        <th>Formula</th>
+                        <th>Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>CISO</code></td>
+                        <td><code>block_index[i]</code> MSB (bit 31)</td>
+                        <td><code>u32le</code></td>
+                        <td><code>flag = (entry &amp; 0x80000000) != 0</code></td>
+                        <td>In CISO v1: <code>1</code> = stored uncompressed (raw <code>block_size</code> bytes); <code>0</code> = raw RFC 1951 deflate stream (no zlib header)</td>
+                    </tr>
+                    <tr>
+                        <td><code>CISO</code></td>
+                        <td><code>block_index[i]</code> bits <code>0..30</code></td>
+                        <td><code>u64</code></td>
+                        <td><code>start = (u64(entry &amp; 0x7FFFFFFF)) &lt;&lt; align</code></td>
+                        <td>Byte offset of block <code>i</code> in the <code>.cso</code> file</td>
+                    </tr>
+                    <tr>
+                        <td><code>CISO</code></td>
+                        <td>Stored block length</td>
+                        <td><code>u64</code></td>
+                        <td><code>stored_size = ((u64(next &amp; 0x7FFFFFFF)) &lt;&lt; align) - start</code></td>
+                        <td>Byte span of compressed or raw block data before stripping alignment padding</td>
+                    </tr>
+                    <tr>
+                        <td><code>CISO v2</code></td>
+                        <td>Bit 31 + size check</td>
+                        <td><code>u32le</code></td>
+                        <td><code>if flag and stored_size &lt; block_size: LZ4 else raw</code></td>
+                        <td>In CISO v2 (<code>version == 2</code>), bit 31 selects LZ4 compression when <code>stored_size &lt; block_size</code>, or raw uncompressed when equal</td>
+                    </tr>
+                    <tr>
+                        <td><code>DAX</code></td>
+                        <td>Fixed frame size</td>
+                        <td><code>u32</code></td>
+                        <td><code>DAX_FRAME_SIZE = 0x2000</code> (8192 bytes)</td>
+                        <td>4 ISO-9660 sectors per DAX frame; compressed frames use standard zlib stream (<code>wbits = +15</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>UMD_DATA.BIN</code></td>
+                        <td>Pipe-delimited text</td>
+                        <td><code>char[]</code></td>
+                        <td><code>&lt;DISC_ID&gt;|&lt;HEX16&gt;|&lt;FLAGS&gt;|&lt;TYPE&gt;</code></td>
+                        <td>Example format: <code>UCUS-98600|0000000000000000|0001|G</code> (<code>G</code> = Game, <code>V</code> = Video, <code>A</code> = Audio)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="edge-cases" class="section">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>CISO <code>header_size == 0</code> quirk:</strong> Early CSO compressors wrote <code>0</code> into offset <code>0x04</code> instead of <code>24</code> (<code>0x18</code>). Parsers should normalize <code>header_size == 0</code> to <code>0x18</code> and begin reading <code>block_index</code> at <code>0x18</code>.</li>
+            <li><strong>64-bit shift requirement in CISO:</strong> Even though each <code>block_index</code> entry is 32 bits, shifting <code>(entry &amp; 0x7FFFFFFF) &lt;&lt; align</code> can exceed <code>0xFFFFFFFF</code> when <code>align &gt; 0</code>. Always cast the masked value to 64-bit unsigned integer before shifting.</li>
+            <li><strong>Raw deflate (CSO) vs. zlib wrapper (DAX):</strong> CISO v1 omits the 2-byte zlib header and 4-byte Adler-32 trailer (inflate with <code>wbits = -15</code>), whereas DAX uses standard zlib-wrapped deflate streams (<code>wbits = +15</code>).</li>
+            <li><strong><code>BOOT.BIN</code> vs. <code>EBOOT.BIN</code> on retail UMDs:</strong> Retail UMDs execute <code>/PSP_GAME/SYSDIR/EBOOT.BIN</code> (<code>~PSP</code>). <code>BOOT.BIN</code> is often zero-filled or cleared in retail disc mastering while retaining a valid ISO-9660 directory entry; parsers must not assume <code>BOOT.BIN</code> contains a valid ELF on retail discs.</li>
+            <li><strong>ISO-9660 version suffix:</strong> Standard ISO-9660 directory entries may carry the <code>;1</code> file version identifier (e.g., <code>EBOOT.BIN;1</code>); virtual <code>disc0:/</code> drivers strip <code>;1</code> during lookup.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode" class="section">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function open_ciso(stream):
+    seek(stream, 0x00)
+    if read_bytes(stream, 4) != b"CISO":
+        error("Invalid CISO magic")
+
+    header_size = read_u32le(stream)
+    if header_size == 0:
+        header_size = 0x18
+    total_bytes = read_u64le(stream)
+    block_size  = read_u32le(stream)
+    version     = read_u8(stream)
+    align       = read_u8(stream)
+    _reserved   = read_bytes(stream, 2)
+
+    if block_size == 0:
+        error("Invalid CISO block_size = 0")
+
+    num_blocks = (total_bytes + block_size - 1) // block_size
+    seek(stream, header_size)
+    indices = [read_u32le(stream) for _ in range(num_blocks + 1)]
+    return {
+        "total_bytes": total_bytes, "block_size": block_size,
+        "version": version, "align": align, "indices": indices
+    }
+
+function read_ciso_block(stream, ciso, block_idx):
+    raw_entry  = ciso["indices"][block_idx]
+    next_entry = ciso["indices"][block_idx + 1]
+    flag       = (raw_entry &amp; 0x80000000) != 0
+    start      = (uint64(raw_entry  &amp; 0x7FFFFFFF)) &lt;&lt; ciso["align"]
+    end        = (uint64(next_entry &amp; 0x7FFFFFFF)) &lt;&lt; ciso["align"]
+    if end &lt; start:
+        error("Invalid CISO block offset order")
+
+    seek(stream, start)
+    chunk = read_bytes(stream, end - start)
+
+    if ciso["version"] &lt;= 1:
+        if flag:
+            return chunk[:ciso["block_size"]]
+        return inflate_raw_deflate(chunk, expected_size=ciso["block_size"])
+    elif ciso["version"] == 2:
+        if not flag:
+            return inflate_raw_deflate(chunk, expected_size=ciso["block_size"])
+        elif len(chunk) &gt;= ciso["block_size"]:
+            return chunk[:ciso["block_size"]]
+        else:
+            return decompress_lz4_block(chunk, expected_size=ciso["block_size"])
+    else:
+        error("Unsupported CISO version")
+
+function open_dax(stream):
+    seek(stream, 0x00)
+    if read_bytes(stream, 4) != b"DAX\x00":
+        error("Invalid DAX magic")
+    orig_size = read_u32le(stream)
+    version   = read_u32le(stream)
+    nc_areas  = read_u32le(stream)
+    _reserved = read_bytes(stream, 16)
+
+    num_frames    = (orig_size + 0x1FFF) // 0x2000
+    frame_offsets = [read_u32le(stream) for _ in range(num_frames)]
+    frame_sizes   = [read_u16le(stream) for _ in range(num_frames)]
+    nc_ranges     = [(read_u32le(stream), read_u32le(stream)) for _ in range(nc_areas)]
+    return {
+        "orig_size": orig_size, "version": version,
+        "frame_offsets": frame_offsets, "frame_sizes": frame_sizes, "nc_ranges": nc_ranges
+    }
+
+function read_dax_frame(stream, dax, frame_idx):
+    offset = dax["frame_offsets"][frame_idx]
+    size   = dax["frame_sizes"][frame_idx]
+    seek(stream, offset)
+    raw = read_bytes(stream, size)
+
+    for (start_f, end_f) in dax["nc_ranges"]:
+        if start_f &lt;= frame_idx &lt;= end_f:
+            return raw
+
+    return inflate_zlib(raw, expected_size=0x2000)</code></pre>
+    </section>
+
+    <section id="provenance" class="section">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>The ISO-9660 PVD specification, UMD directory hierarchy (<code>/UMD_DATA.BIN</code>, <code>/PSP_GAME/SYSDIR/EBOOT.BIN</code>), CISO v1 header/block index encoding, and DAX <code>0x2000</code>-frame zlib format are <strong>confirmed</strong> across retail UMD media and standard preservation/loader implementations.</p>
+        <aside class="callout-warn">
+            <p><strong>Container &amp; disc-type caveats:</strong> CISO and DAX are community/emulator compressed preservation containers rather than official Sony disc formats. Some later CSO tools emit CISO v2 (LZ4 support via bit 31 when <code>stored_size &lt; block_size</code>) or non-standard <code>block_size</code> values; verify <code>version</code> and <code>block_size</code> before assuming v1 raw deflate. Non-game UMD Video/Audio discs use <code>UMD_VIDEO/</code> or <code>UMD_AUDIO/</code> trees instead of <code>PSP_GAME/</code>.</p>
+        </aside>
+    </section>
+</body>
+</html>

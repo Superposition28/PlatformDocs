@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PlayStation 2 (PS2) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><span>PlayStation 2</span>
+    </nav>
+
+    <h1>PlayStation 2 (PS2) Platform Formats</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">PLATFORM OVERVIEW · MIPS R5900 EE + MIPS R3000A IOP · LITTLE-ENDIAN</p>
+        <p>The Sony PlayStation 2 uses a heterogeneous dual-MIPS architecture pairing a 64-bit <strong>Emotion Engine (EE)</strong> main CPU with a 32-bit <strong>I/O Processor (IOP)</strong> derived from the original PlayStation CPU. All platform-inherited boot descriptors, executables, relocatable device drivers, firmware update images, and memory card system descriptors operate in <strong>little-endian</strong> byte order (aside from dual-endian ISO-9660 volume structures).</p>
+        <dl>
+            <dt>Primary CPU (EE)</dt>
+            <dd>MIPS R5900 (MIPS III/IV subset + 128-bit MMI SIMD), little-endian, 294.912 MHz, 32 MiB RDRAM, 16 KiB Scratchpad</dd>
+            <dt>I/O CPU (IOP)</dt>
+            <dd>MIPS R3000A (MIPS I), little-endian, 36.864 MHz (33.8688 MHz in PS1 mode), 2 MiB IOP RAM</dd>
+            <dt>Inter-Processor Bus</dt>
+            <dd>Serial Interface (SIF0 / SIF1 / SIF2 DMA channels, SIFCMD, and SIFRPC)</dd>
+            <dt>Media &amp; Storage</dt>
+            <dd>CD-ROM (ISO-9660), DVD-5 / DVD-9 (ISO-9660 + UDF 1.02 Bridge), 8 MiB MagicGate Memory Card (MCFS), PS2 HDD</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#architecture">1. Dual-Processor Architecture</a></li>
+            <li><a href="#boot-sequence">2. CD/DVD Boot &amp; Module Loading Sequence</a></li>
+            <li><a href="#format-index">3. Platform Format Specifications</a></li>
+            <li><a href="#scope">4. Platform Boundary</a></li>
+        </ul>
+    </nav>
+
+    <section class="section" id="architecture">
+        <h2>1. Dual-Processor Architecture</h2>
+        <p>Every PS2 runtime environment cleanly separates high-throughput compute and rendering from peripheral I/O:</p>
+        <ul>
+            <li><strong>Emotion Engine (EE):</strong> Runs user applications compiled as <code>ELFCLASS32</code> little-endian MIPS binaries (<code>e_machine = 8</code>) tagged with R5900 machine flags and 64-bit register ABI (<code>EABI64</code>) over a 32-bit virtual address space. The EE directly drives Vector Units (<code>VU0</code>/<code>VU1</code>) and the Graphics Synthesizer (<code>GS</code>).</li>
+            <li><strong>I/O Processor (IOP):</strong> Manages optical media (<code>CDVDMAN</code>), memory cards (<code>MCMAN</code>), controllers (<code>PADMAN</code>), SPU2 audio, USB, and network/HDD interfaces. IOP drivers are distributed as relocatable <code>.irx</code> modules loaded dynamically into the 2 MiB IOP RAM and linked against resident kernel export tables.</li>
+            <li><strong>ROM &amp; Firmware Images:</strong> Boot ROM (<code>rom0:</code>) and disc-resident IOP replacement images (<code>IOPRP*.IMG</code>) package drivers and configuration files in flat 16-byte-aligned <code>ROMDIR</code> containers.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="boot-sequence">
+        <h2>2. CD/DVD Boot &amp; Module Loading Sequence</h2>
+        <p>Cold boot from optical media follows a deterministic pipeline governed by the PS2 Boot ROM (<code>OSDSYS</code> / <code>EELOAD</code>):</p>
+        <ol>
+            <li><strong>Disc Recognition &amp; Mount:</strong> The optical drive identifies PS2 CD-ROM (Mode 2 Form 1) or DVD-ROM media and mounts the ISO-9660 filesystem via the IOP <code>cdrom0:</code> device driver.</li>
+            <li><strong>Boot Descriptor Lookup:</strong> <code>OSDSYS</code> opens <code>cdrom0:\SYSTEM.CNF;1</code> and parses ASCII <code>KEY = VALUE</code> directives (<code>BOOT2</code>, <code>VER</code>, <code>VMODE</code>, and optional <code>HDDUNITPOWER</code>).</li>
+            <li><strong>EE Executable Load:</strong> <code>EELOAD</code> (invoked via <code>LoadExecPS2</code>) reads the ELF32 binary referenced by <code>BOOT2</code> (typically named after the catalog disc ID, e.g. <code>cdrom0:\SLUS_200.01;1</code>), maps <code>PT_LOAD</code> segments into EE RAM, zeroes <code>p_memsz - p_filesz</code> tails, flushes instruction/data caches, and jumps to <code>e_entry</code>.</li>
+            <li><strong>IOP Reboot &amp; IRX Loading:</strong> Early in initialization, the EE program calls <code>SifIopReset</code>—optionally passing a disc-bundled <code>IOPRP*.IMG</code> ROMDIR image to replace outdated ROM drivers—and then calls <code>SifLoadModule</code> over SIF RPC to relocate and start <code>.irx</code> drivers on the IOP.</li>
+        </ol>
+    </section>
+
+    <section class="section" id="format-index">
+        <h2>3. Platform Format Specifications</h2>
+        <p>Select any specification below to inspect its binary layout tables, bitfields, loader edge cases, and clean-room parser pseudocode:</p>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PlayStation 2 Platform-Inherited Formats</caption>
+                <thead>
+                    <tr>
+                        <th>Format</th>
+                        <th>Canonical Files</th>
+                        <th>Magic / Signature</th>
+                        <th>Target / Subsystem</th>
+                        <th>Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><a href="../../index.html#ps2-system-cnf" target="_top">SYSTEM.CNF &amp; Disc Layout</a></td>
+                        <td><code>SYSTEM.CNF;1</code>, ISO-9660 / UDF</td>
+                        <td>ASCII <code>BOOT2</code> / <code>CD001</code></td>
+                        <td>Boot ROM (<code>OSDSYS</code>)</td>
+                        <td>Boot descriptor &amp; optical volume layout</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#ps2-ee-elf" target="_top">Emotion Engine ELF32</a></td>
+                        <td><code>ABCD_123.45</code>, <code>*.ELF</code></td>
+                        <td><code>7F 45 4C 46</code> (<code>\x7FELF</code>)</td>
+                        <td>EE MIPS R5900</td>
+                        <td>Primary EE executable binary</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#ps2-irx" target="_top">IOP Relocatable Module</a></td>
+                        <td><code>*.IRX</code></td>
+                        <td><code>7F 45 4C 46</code> + <code>e_type=0xFF80</code></td>
+                        <td>IOP MIPS R3000A</td>
+                        <td>Relocatable I/O driver / library module</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#ps2-ps2-containers" target="_top">IOPRP ROMDIR &amp; ICON.SYS</a></td>
+                        <td><code>IOPRP*.IMG</code>, <code>icon.sys</code></td>
+                        <td><code>RESET</code> / <code>ROMDIR</code>; <code>PS2D</code></td>
+                        <td>IOP BIOS / Memory Card</td>
+                        <td>IOP firmware archive &amp; MC browser descriptor</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="scope">
+        <h2>4. Platform Boundary</h2>
+        <p>These pages document only Sony PlayStation 2 hardware, boot ROM, IOP/EE kernel, and SDK-mandated formats. Title-specific archives, asset containers, audio banks, and middleware formats are intentionally excluded. Executable specifications cover container headers, ABI flags, relocation formulas, and generalized loader memory mapping without instruction-set emulation.</p>
+    </section>
+</body>
+</html>

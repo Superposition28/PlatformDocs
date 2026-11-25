@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PDB Debug Symbols &amp; OLE CFB / MSI Containers — Windows PC</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#windows" target="_top">Windows PC</a><span>/</span><span>PDB Symbols &amp; MSI Containers</span>
+    </nav>
+
+    <h1>Windows Platform Debug &amp; Packaging Containers (MSF 7.0 / PDB &amp; CFB / <code>.msi</code>)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Debug &amp; Packaging Containers · MSF 7.0 / CodeView RSDS / OLE CFB</p>
+        <p>Standard Windows toolchain and OS packaging containers: PE CodeView <code>RSDS</code> debug directory entries pointing to MSF 7.0 Program Database (<code>.pdb</code>) symbol stores, alongside OLE Compound File Binary (<code>CFB</code>) containers used by Windows Installer (<code>.msi</code>) packages.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>.pdb</code> (MSF 7.0), <code>.msi</code> / <code>.msp</code> / <code>.msm</code> (Windows Installer CFB)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>52 53 44 53</code> (<code>"RSDS"</code>); <code>"Microsoft C/C++ MSF 7.00\r\n\x1ADS\0\0\0"</code> (32 bytes); <code>D0 CF 11 E0 A1 B1 1A E1</code> (CFB)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (Microsoft GUIDs use mixed-endian <code>u32le</code>-<code>u16le</code>-<code>u16le</code>-<code>u8[8]</code> layout)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Microsoft Visual C++ / LLVM PDB toolchain &amp; Windows Installer (<code>msiexec.exe</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Debug symbol database (<code>.pdb</code>) and structured storage installer database (<code>application/x-msi</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>This document covers two foundational Windows platform container formats:</p>
+        <ul>
+            <li><strong>MSF 7.0 / Program Database (<code>.pdb</code>):</strong> Multi-Stream File (MSF) version 7.00 identified by the 32-byte ASCII+control magic <code>Microsoft C/C++ MSF 7.00\r\n\x1ADS\0\0\0</code> at offset <code>0x00</code>. Linked PE images reference their matching PDB via an <code>IMAGE_DEBUG_DIRECTORY</code> entry of type <code>2</code> (<code>IMAGE_DEBUG_TYPE_CODEVIEW</code>) carrying an <code>RSDS</code> (<code>0x53445352</code>) record.</li>
+            <li><strong>OLE Compound File Binary (CFB / <code>.msi</code>):</strong> Structured Storage container (<code>[MS-CFB]</code>) identified by the 8-byte signature <code>D0 CF 11 E0 A1 B1 1A E1</code> at offset <code>0x00</code>. Windows Installer packages (<code>.msi</code>), patches (<code>.msp</code>), and merge modules (<code>.msm</code>) store relational installer tables, string pools, and embedded CAB archives as CFB streams.</li>
+        </ul>
+        <p>All integer fields in both formats are <strong>little-endian</strong>. Note that 16-byte Microsoft GUIDs serialize their first three components in little-endian (<code>Data1: u32le</code>, <code>Data2: u16le</code>, <code>Data3: u16le</code>) and the final 8 bytes (<code>Data4</code>) in big-endian byte order.</p>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="IMAGE_DEBUG_DIRECTORY and RSDS layout" tabindex="0">
+            <table class="format-counts">
+                <caption>PE DataDir[6] — IMAGE_DEBUG_DIRECTORY (28 bytes) &amp; CodeView RSDS Record</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Dbg +0x00</td><td>4</td><td>u32le</td><td>Characteristics</td><td>Reserved; <code>0</code>.</td></tr>
+                    <tr><td>Dbg +0x04</td><td>4</td><td>u32le</td><td>TimeDateStamp</td><td>Creation timestamp or deterministic build hash.</td></tr>
+                    <tr><td>Dbg +0x08</td><td>2</td><td>u16le</td><td>MajorVersion</td><td>Format major version.</td></tr>
+                    <tr><td>Dbg +0x0A</td><td>2</td><td>u16le</td><td>MinorVersion</td><td>Format minor version.</td></tr>
+                    <tr><td>Dbg +0x0C</td><td>4</td><td>u32le</td><td>Type</td><td><code>2</code> = <code>IMAGE_DEBUG_TYPE_CODEVIEW</code>; <code>16</code> = <code>REPRO</code>.</td></tr>
+                    <tr><td>Dbg +0x10</td><td>4</td><td>u32le</td><td>SizeOfData</td><td>Byte length of debug payload.</td></tr>
+                    <tr><td>Dbg +0x14</td><td>4</td><td>u32le</td><td>AddressOfRawData</td><td>RVA of debug payload when mapped, or <code>0</code> if unmapped.</td></tr>
+                    <tr><td>Dbg +0x18</td><td>4</td><td>u32le</td><td>PointerToRawData</td><td>File offset of debug payload.</td></tr>
+                    <tr><td>RSDS +0x00</td><td>4</td><td>u8[4]</td><td>CvSignature</td><td><code>52 53 44 53</code> (<code>"RSDS"</code>) for PDB 7.0 (<code>"NB10"</code> for legacy PDB 2.0).</td></tr>
+                    <tr><td>RSDS +0x04</td><td>16</td><td>GUID</td><td>Signature</td><td>16-byte GUID matching PDB Stream 1 <code>Guid</code>.</td></tr>
+                    <tr><td>RSDS +0x14</td><td>4</td><td>u32le</td><td>Age</td><td>Incremental link age counter matching PDB Stream 1 <code>Age</code>.</td></tr>
+                    <tr><td>RSDS +0x18</td><td>var</td><td>utf8_z</td><td>PdbFileName</td><td>Null-terminated UTF-8 path or filename of the <code>.pdb</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="MSF 7.0 SuperBlock and Stream Directory" tabindex="0">
+            <table class="format-counts">
+                <caption>MSF 7.0 SuperBlock (56 bytes at offset 0x00, Page 0) &amp; Stream Directory</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>32</td><td>u8[32]</td><td>FileMagic</td><td><code>"Microsoft C/C++ MSF 7.00\r\n\x1ADS\0\0\0"</code>.</td></tr>
+                    <tr><td>0x20</td><td>4</td><td>u32le</td><td>BlockSize</td><td>Page size in bytes: <code>512</code>, <code>1024</code>, <code>2048</code>, or <code>4096</code> (modern default <code>0x1000</code>).</td></tr>
+                    <tr><td>0x24</td><td>4</td><td>u32le</td><td>FreeBlockMapBlock</td><td>Index of active Free Page Map bank: <code>1</code> (FPM1) or <code>2</code> (FPM2).</td></tr>
+                    <tr><td>0x28</td><td>4</td><td>u32le</td><td>NumBlocks</td><td>Total pages in file (<code>FileSize == NumBlocks * BlockSize</code>).</td></tr>
+                    <tr><td>0x2C</td><td>4</td><td>u32le</td><td>NumDirectoryBytes</td><td>Total byte size of the serialized Stream Directory.</td></tr>
+                    <tr><td>0x30</td><td>4</td><td>u32le</td><td>Unknown</td><td>Always <code>0</code>.</td></tr>
+                    <tr><td>0x34</td><td>4</td><td>u32le</td><td>BlockMapAddr</td><td>Page index containing the array of <code>u32le</code> page indices that hold the Stream Directory.</td></tr>
+                    <tr><td>Dir +0x00</td><td>4</td><td>u32le</td><td>NumStreams</td><td>Number of streams in the PDB.</td></tr>
+                    <tr><td>Dir +0x04</td><td>4 &times; NumStreams</td><td>u32le[]</td><td>StreamSizes</td><td>Byte size per stream; <code>0xFFFFFFFF</code> denotes a deleted/nil stream.</td></tr>
+                    <tr><td>Dir +var</td><td>4 &times; &Sigma;pages</td><td>u32le[]</td><td>StreamBlocks</td><td>Concatenated page index lists for each non-nil stream (<code>ceil(size / BlockSize)</code> pages each).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="PDB Info Stream and DBI Header" tabindex="0">
+            <table class="format-counts">
+                <caption>Standard PDB Streams: Stream 1 (PDB Info Header) &amp; Stream 3 (DBI Stream Header, 64 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>PDB +0x00</td><td>4</td><td>u32le</td><td>Version</td><td><code>20000404</code> (VC70) in standard MSF 7.0 PDBs.</td></tr>
+                    <tr><td>PDB +0x04</td><td>4</td><td>u32le</td><td>Signature</td><td>32-bit Unix timestamp (for matching legacy/ID).</td></tr>
+                    <tr><td>PDB +0x08</td><td>4</td><td>u32le</td><td>Age</td><td>Incremental link age; must match PE <code>RSDS.Age</code> (or &ge; in some symbol checks).</td></tr>
+                    <tr><td>PDB +0x0C</td><td>16</td><td>GUID</td><td>Guid</td><td>Unique PDB GUID; must match PE <code>RSDS.Signature</code>.</td></tr>
+                    <tr><td>DBI +0x00</td><td>4</td><td>i32le</td><td>VersionSignature</td><td>Always <code>-1</code> (<code>0xFFFFFFFF</code>).</td></tr>
+                    <tr><td>DBI +0x04</td><td>4</td><td>u32le</td><td>VersionHeader</td><td>Typically <code>19990903</code> (V70).</td></tr>
+                    <tr><td>DBI +0x08</td><td>4</td><td>u32le</td><td>Age</td><td>Matches PDB Info Stream <code>Age</code>.</td></tr>
+                    <tr><td>DBI +0x0C</td><td>2</td><td>u16le</td><td>GlobalStreamIndex</td><td>Stream index of Global Symbol hash table.</td></tr>
+                    <tr><td>DBI +0x0E</td><td>2</td><td>u16le</td><td>BuildNumber</td><td>Packed PDB toolchain version (bit 15 = new version format).</td></tr>
+                    <tr><td>DBI +0x10</td><td>2</td><td>u16le</td><td>PublicStreamIndex</td><td>Stream index of Public Symbol hash table.</td></tr>
+                    <tr><td>DBI +0x12</td><td>2</td><td>u16le</td><td>PdbDllVersion</td><td>Version of <code>mspdb*.dll</code>.</td></tr>
+                    <tr><td>DBI +0x14</td><td>2</td><td>u16le</td><td>SymRecordStream</td><td>Stream index holding global/public symbol records.</td></tr>
+                    <tr><td>DBI +0x16</td><td>2</td><td>u16le</td><td>PdbDllRbld</td><td>Rebuild number of <code>mspdb*.dll</code>.</td></tr>
+                    <tr><td>DBI +0x18</td><td>28</td><td>i32le[7]</td><td>SubstreamSizes</td><td>Byte lengths of <code>ModInfo</code>, <code>SectionContr</code>, <code>SectionMap</code>, <code>SourceInfo</code>, <code>TypeServer</code>, <code>EC</code>, and <code>DbgHeader</code>.</td></tr>
+                    <tr><td>DBI +0x34</td><td>12</td><td>u16le + u8...</td><td>Flags / Machine / Pad</td><td><code>Flags</code> (<code>u16le</code>), <code>Machine</code> (<code>u16le</code> COFF ID), <code>Padding</code> (<code>u32le</code> + 4 bytes).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="OLE Compound File Binary Header and Directory Entry" tabindex="0">
+            <table class="format-counts">
+                <caption>OLE Compound File Binary (CFB / <code>.msi</code>) Header (512 bytes) &amp; Directory Entry (128 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Hdr +0x00</td><td>8</td><td>u8[8]</td><td>HeaderSignature</td><td><code>D0 CF 11 E0 A1 B1 1A E1</code>.</td></tr>
+                    <tr><td>Hdr +0x08</td><td>16</td><td>u8[16]</td><td>HeaderCLSID</td><td>All zeros.</td></tr>
+                    <tr><td>Hdr +0x18</td><td>2</td><td>u16le</td><td>MinorVersion</td><td><code>0x003E</code> (62).</td></tr>
+                    <tr><td>Hdr +0x1A</td><td>2</td><td>u16le</td><td>MajorVersion</td><td><code>0x0003</code> (512-byte sectors) or <code>0x0004</code> (4096-byte sectors).</td></tr>
+                    <tr><td>Hdr +0x1C</td><td>2</td><td>u16le</td><td>ByteOrder</td><td><code>0xFFFE</code> (little-endian).</td></tr>
+                    <tr><td>Hdr +0x1E</td><td>2</td><td>u16le</td><td>SectorShift</td><td><code>0x0009</code> (512 B for v3) or <code>0x000C</code> (4096 B for v4).</td></tr>
+                    <tr><td>Hdr +0x20</td><td>2</td><td>u16le</td><td>MiniSectorShift</td><td><code>0x0006</code> (64-byte mini-sectors).</td></tr>
+                    <tr><td>Hdr +0x28</td><td>4</td><td>u32le</td><td>NumberOfDirectorySectors</td><td><code>0</code> for v3; directory sector count for v4.</td></tr>
+                    <tr><td>Hdr +0x2C</td><td>4</td><td>u32le</td><td>NumberOfFATSectors</td><td>Count of File Allocation Table sectors.</td></tr>
+                    <tr><td>Hdr +0x30</td><td>4</td><td>u32le</td><td>FirstDirectorySectorLocation</td><td>Starting sector ID of the Directory Stream.</td></tr>
+                    <tr><td>Hdr +0x38</td><td>4</td><td>u32le</td><td>MiniStreamCutoffSize</td><td><code>0x00001000</code> (streams &lt; 4096 bytes reside in the Root Entry's MiniStream).</td></tr>
+                    <tr><td>Hdr +0x3C</td><td>4</td><td>u32le</td><td>FirstMiniFATSectorLocation</td><td>First sector of MiniFAT chain (or <code>0xFFFFFFFE</code>).</td></tr>
+                    <tr><td>Hdr +0x40</td><td>4</td><td>u32le</td><td>NumberOfMiniFATSectors</td><td>Count of MiniFAT sectors.</td></tr>
+                    <tr><td>Hdr +0x44</td><td>4</td><td>u32le</td><td>FirstDIFATSectorLocation</td><td>First DIFAT overflow sector (or <code>0xFFFFFFFE</code>).</td></tr>
+                    <tr><td>Hdr +0x48</td><td>4</td><td>u32le</td><td>NumberOfDIFATSectors</td><td>Count of DIFAT overflow sectors.</td></tr>
+                    <tr><td>Hdr +0x4C</td><td>436</td><td>u32le[109]</td><td>DIFAT</td><td>First 109 FAT sector IDs (<code>0xFFFFFFFF</code> = unused).</td></tr>
+                    <tr><td>Dir +0x00</td><td>64</td><td>u16le[32]</td><td>DirectoryEntryName</td><td>UTF-16LE object name, null-terminated.</td></tr>
+                    <tr><td>Dir +0x40</td><td>2</td><td>u16le</td><td>DirectoryEntryNameLength</td><td>Byte length of name including null terminator.</td></tr>
+                    <tr><td>Dir +0x42</td><td>1</td><td>u8</td><td>ObjectType</td><td><code>0</code> = Unknown, <code>1</code> = Storage, <code>2</code> = Stream, <code>5</code> = Root Storage.</td></tr>
+                    <tr><td>Dir +0x43</td><td>1</td><td>u8</td><td>ColorFlag</td><td><code>0</code> = Red, <code>1</code> = Black (Red-Black tree node).</td></tr>
+                    <tr><td>Dir +0x44</td><td>12</td><td>u32le[3]</td><td>Siblings &amp; Child IDs</td><td><code>LeftSiblingID</code>, <code>RightSiblingID</code>, <code>ChildID</code> (<code>0xFFFFFFFF</code> = NOSTREAM).</td></tr>
+                    <tr><td>Dir +0x74</td><td>4</td><td>u32le</td><td>StartingSectorLocation</td><td>First sector (or mini-sector) of stream data.</td></tr>
+                    <tr><td>Dir +0x78</td><td>8</td><td>u64le</td><td>StreamSize</td><td>Byte size of stream (mask high 32 bits in v3).</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <div class="table-scroll" role="region" aria-label="PDB Fixed Streams and CFB Sentinels" tabindex="0">
+            <table class="format-counts">
+                <caption>Fixed PDB Stream Indices &amp; CFB FAT Sector Sentinels</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">ID / Sentinel</th>
+                        <th scope="col">Container</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Name</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Stream 0</td><td>MSF 7.0</td><td>stream</td><td>Old Directory</td><td>Previous-generation MSF directory snapshot (ignored during read).</td></tr>
+                    <tr><td>Stream 1</td><td>MSF 7.0</td><td>stream</td><td>PDB Info</td><td>Version, Signature, Age, GUID, and Named Stream hash map (e.g. <code>/names</code>).</td></tr>
+                    <tr><td>Stream 2</td><td>MSF 7.0</td><td>stream</td><td>TPI</td><td>Type Program Information (<code>LF_*</code> CodeView type records starting at <code>0x1000</code>).</td></tr>
+                    <tr><td>Stream 3</td><td>MSF 7.0</td><td>stream</td><td>DBI</td><td>Debug Information: module list, section map, source files, and <code>DbgHeader</code> stream IDs.</td></tr>
+                    <tr><td>Stream 4</td><td>MSF 7.0</td><td>stream</td><td>IPI</td><td>ID Program Information (<code>LF_FUNC_ID</code>, <code>LF_BUILDINFO</code>, <code>LF_STRING_ID</code>).</td></tr>
+                    <tr><td>0xFFFFFFFC</td><td>CFB FAT</td><td>u32le</td><td>DIFSECT</td><td>Marks a DIFAT sector inside the FAT.</td></tr>
+                    <tr><td>0xFFFFFFFD</td><td>CFB FAT</td><td>u32le</td><td>FATSECT</td><td>Marks a FAT sector inside the FAT.</td></tr>
+                    <tr><td>0xFFFFFFFE</td><td>CFB FAT</td><td>u32le</td><td>ENDOFCHAIN</td><td>Terminates a sector chain.</td></tr>
+                    <tr><td>0xFFFFFFFF</td><td>CFB FAT</td><td>u32le</td><td>FREESECT</td><td>Unallocated sector.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>MSF Page Allocation &amp; CFB Sector Translation Formulas</h3>
+        <pre><code>// MSF 7.0 two-level Stream Directory reconstruction:
+dir_pages = ceil(SuperBlock.NumDirectoryBytes / SuperBlock.BlockSize)
+// Read dir_pages u32le indices from file offset (SuperBlock.BlockMapAddr * SuperBlock.BlockSize)
+// Concatenate those pages to obtain the Stream Directory byte buffer.
+// Free Page Map (FPM) blocks occur at page (FreeBlockMapBlock + k * BlockSize) for k = 0, 1, ...
+
+// OLE CFB Sector Offset Formula:
+sector_size      = 1 &lt;&lt; Header.SectorShift
+mini_sector_size = 1 &lt;&lt; Header.MiniSectorShift
+sector_offset(sector_id) = (sector_id + 1) * sector_size
+// Streams with StreamSize &lt; MiniStreamCutoffSize (4096) are indexed via MiniFAT inside Root Entry's stream!</code></pre>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>MSF Discontiguous Streams &amp; Free Page Maps:</strong> Any stream (including the Stream Directory itself) may span non-contiguous pages. When allocating or walking FPM blocks, note that FPM blocks appear periodically every <code>BlockSize</code> pages (each FPM block holds <code>BlockSize * 8</code> bits, covering one interval of <code>BlockSize</code> or <code>BlockSize * 8</code> pages depending on tooling).</li>
+            <li><strong>Portable PDB vs. Native MSF 7.0 PDB:</strong> .NET Portable PDBs use ECMA-335 CLI metadata streams starting with magic <code>BSJB</code> (<code>0x424A5342</code>) rather than MSF 7.0, even though both share the <code>.pdb</code> extension and PE <code>RSDS</code> pointer.</li>
+            <li><strong>CFB v3 Header Size &amp; StreamSize Masking:</strong> Version 3 CFB files have 512-byte sectors, yet v4 files have 4096-byte sectors (the 512-byte header is zero-padded to 4096 bytes). In v3 files, the upper 32 bits of <code>StreamSize</code> may contain garbage in legacy writers and should be masked with <code>&amp; 0xFFFFFFFF</code>.</li>
+            <li><strong>MSI Compressed Stream Names:</strong> Windows Installer <code>.msi</code> databases encode table and string-pool stream names in CFB using a 6-bit Base64-like Unicode range (<code>U+3800..U+4840</code>), where characters in <code>[0x3800..0x47FF]</code> pack two 6-bit symbols per 16-bit char and <code>[0x4800..0x483F]</code> encodes one 6-bit symbol.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Complete Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function parse_msf7(buf: bytes) -&gt; dict:
+    magic = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00"
+    require(len(buf) &gt;= 0x38 and buf[0:32] == magic, "invalid MSF 7.00 magic")
+
+    block_size    = u32le(buf, 0x20)
+    num_blocks    = u32le(buf, 0x28)
+    dir_bytes     = u32le(buf, 0x2C)
+    block_map_pg  = u32le(buf, 0x34)
+    require(block_size in [512, 1024, 2048, 4096], "invalid BlockSize")
+    require(num_blocks * block_size &lt;= len(buf), "truncated MSF file")
+
+    n_dir_pages = (dir_bytes + block_size - 1) // block_size
+    bm_off = block_map_pg * block_size
+    dir_buf = bytearray()
+    for i in range(n_dir_pages):
+        pg = u32le(buf, bm_off + i * 4)
+        dir_buf.extend(buf[pg * block_size : (pg + 1) * block_size])
+    dir_buf = dir_buf[0 : dir_bytes]
+
+    num_streams = u32le(dir_buf, 0)
+    sizes = [u32le(dir_buf, 4 + i * 4) for i in range(num_streams)]
+    pos = 4 + num_streams * 4
+    streams = []
+    for sz in sizes:
+        if sz == 0xFFFFFFFF:
+            streams.append(null)
+            continue
+        pgs = (sz + block_size - 1) // block_size
+        data = bytearray()
+        for _ in range(pgs):
+            pg = u32le(dir_buf, pos); pos += 4
+            data.extend(buf[pg * block_size : (pg + 1) * block_size])
+        streams.append(bytes(data[0 : sz]))
+
+    // Match PDB Info Stream (Stream 1) against PE RSDS entry:
+    s1 = streams[1]
+    pdb_info = { Version: u32le(s1, 0), Signature: u32le(s1, 4), Age: u32le(s1, 8), Guid: s1[12:28] }
+    return { info: pdb_info, streams: streams }
+
+function parse_cfb_header(buf: bytes) -&gt; dict:
+    require(len(buf) &gt;= 512 and buf[0:8] == b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", "invalid CFB magic")
+    require(u16le(buf, 0x1C) == 0xFFFE, "expected little-endian CFB")
+    sec_shift = u16le(buf, 0x1E)
+    sec_size = 1 &lt;&lt; sec_shift
+    return {
+        MajorVersion:    u16le(buf, 0x1A),
+        SectorSize:      sec_size,
+        MiniSectorSize:  1 &lt;&lt; u16le(buf, 0x20),
+        NumFATSectors:   u32le(buf, 0x2C),
+        FirstDirSector:  u32le(buf, 0x30),
+        MiniCutoff:      u32le(buf, 0x38),
+        FirstMiniFAT:    u32le(buf, 0x3C),
+        FirstDIFAT:      u32le(buf, 0x44),
+        DIFAT0:          [u32le(buf, 0x4C + i * 4) for i in range(109)],
+    }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p><strong>Confirmed Specifications:</strong> PE CodeView <code>RSDS</code> and <code>IMAGE_DEBUG_DIRECTORY</code> are defined in the Microsoft PE Format spec; OLE Compound File Binary is formally specified in Microsoft Open Specifications <code>[MS-CFB]</code>; MSF 7.0 / PDB SuperBlock, PDB Info, TPI, DBI, and IPI headers are confirmed in Microsoft's published <code>microsoft-pdb</code> reference repository and LLVM PDB documentation.</p>
+        <aside class="callout-warn">
+            <p><strong>Undocumented PDB Sub-Streams Caveat:</strong> While the MSF 7.0 container, PDB Info, TPI/IPI headers, and DBI fixed header are well-documented, several toolchain-internal DBI substreams (such as Edit-and-Continue <code>ECSubstream</code>, linker <code>Fixup</code>/<code>Omap</code> tables, and incremental <code>NamedStreamMap</code> hash internals) are toolchain-version-specific and not guaranteed stable across MSVC/LLVM releases.</p>
+        </aside>
+    </section>
+</body>
+</html>

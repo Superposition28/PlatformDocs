@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nintendo GameCube — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <span>Nintendo GameCube</span>
+    </nav>
+
+    <h1>Nintendo GameCube (DOL)</h1>
+
+    <section class="format-summary" aria-label="Platform summary">
+        <p class="eyebrow">Platform Architecture &amp; Inherited Formats · Big-Endian PowerPC</p>
+        <p>The Nintendo GameCube (codename Dolphin, model prefix DOL) is a big-endian 32-bit PowerPC console built around an IBM Gekko CPU, an ArtX/Nintendo Flipper system ASIC, 24 MiB of main 1T-SRAM, 16 MiB of auxiliary ARAM, and an 8 cm proprietary CAV optical disc (~1.46 GB).</p>
+        <dl>
+            <dt>CPU</dt>
+            <dd>IBM PowerPC 750CXe ("Gekko"), 486 MHz, 32-bit big-endian, paired-singles SIMD, 32 KiB L1 I/D + 256 KiB L2 cache.</dd>
+            <dt>Memory</dt>
+            <dd>24 MiB main 1T-SRAM (<code>0x80000000</code> cached / <code>0xC0000000</code> uncached), 16 MiB ARAM (DMA-only), 3 MiB on-die Flipper 1T-SRAM.</dd>
+            <dt>Optical Media</dt>
+            <dd>8 cm Nintendo Optical Disc (MiniDVD physical medium), <code>1,459,978,240</code> bytes (<code>0x57058000</code>, 712,880 &times; 2048-byte sectors).</dd>
+            <dt>Runtime OS</dt>
+            <dd>Dolphin OS (statically linked SDK runtime with dynamic <code>OSLink</code> module loader and <code>DVD</code> FST streaming).</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#architecture">Hardware &amp; Memory Map</a></li>
+            <li><a href="#boot-chain">IPL &amp; Apploader Boot Chain</a></li>
+            <li><a href="#format-index">Platform-Inherited Formats</a></li>
+            <li><a href="#scope-notes">Scope &amp; Provenance Notes</a></li>
+        </ul>
+    </nav>
+
+    <section id="architecture">
+        <h2>Hardware &amp; Memory Map</h2>
+        <p>GameCube software runs in supervisor mode without virtual memory paging. Fixed PowerPC Block Address Translation (BAT) registers map physical 24 MiB main memory into both cached and uncached virtual windows, alongside memory-mapped Flipper hardware registers and locked L2 cache DMA scratchpad space.</p>
+        <div class="table-scroll" role="region" aria-label="GameCube virtual memory map" tabindex="0">
+            <table class="format-counts">
+                <caption>Standard Dolphin OS Virtual Address Regions</caption>
+                <thead>
+                    <tr>
+                        <th>Base Address</th>
+                        <th>End / Size</th>
+                        <th>Cache Mode</th>
+                        <th>Region</th>
+                        <th>Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x80000000</code></td>
+                        <td><code>0x800030FF</code> (12.25 KiB)</td>
+                        <td>Cached</td>
+                        <td>OS Low-Memory Globals</td>
+                        <td>Exception vectors, <code>boot.bin</code>/<code>bi2.bin</code> mirror, arena bounds, FST pointer, and debug state.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x80003100</code></td>
+                        <td><code>0x817FFFFF</code> (~24 MiB)</td>
+                        <td>Cached</td>
+                        <td>Main 1T-SRAM (Executable &amp; Arena)</td>
+                        <td>Static <code>.dol</code> code/data segments, heap arena (<code>ArenaLo</code>–<code>ArenaHi</code>), stack, and <code>fst.bin</code> at high RAM.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xC0000000</code></td>
+                        <td><code>0xC17FFFFF</code> (24 MiB)</td>
+                        <td>Uncached</td>
+                        <td>Uncached Main RAM Alias</td>
+                        <td>Uncached mirror of physical 1T-SRAM used for hardware-coherent buffers and direct I/O.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xCC000000</code></td>
+                        <td><code>0xCC00FFFF</code></td>
+                        <td>Guarded / Uncached</td>
+                        <td>Flipper Hardware I/O</td>
+                        <td>CP, PE, VI, PI, MI, DSP, DI, SI, EXI, and AI memory-mapped register banks.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xE0000000</code></td>
+                        <td><code>0xE0003FFF</code> (16 KiB)</td>
+                        <td>Locked Cache</td>
+                        <td>Locked L1/DMA Cache</td>
+                        <td>Gekko locked data cache window used for high-speed DMA burst transfers.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="boot-chain">
+        <h2>IPL &amp; Apploader Boot Chain</h2>
+        <p>Unlike PC or standard optical discs that boot via ISO-9660/UDF, the GameCube optical drive uses a proprietary sector framing layer and executes a multi-stage hardware-assisted boot chain directly from fixed disc offsets:</p>
+        <ol>
+            <li><strong>IPL (Boot ROM) Initialization:</strong> The 2 MiB internal Macronix IPL ROM initializes Gekko, Flipper, and 1T-SRAM, optionally runs the system menu if the lid is open or no valid disc is present, and reads the first <code>0x2460</code> bytes of the disc.</li>
+            <li><strong>Disc Identification (<code>boot.bin</code> &amp; <code>bi2.bin</code>):</strong> IPL validates the big-endian magic word <code>0xC2339F3D</code> at disc offset <code>0x001C</code>, populates OS low-memory boot structures from <code>boot.bin</code> (<code>0x0000</code>–<code>0x043F</code>) and <code>bi2.bin</code> (<code>0x0440</code>–<code>0x243F</code>), and reads the 32-byte Apploader header at <code>0x2440</code>.</li>
+            <li><strong>Apploader Execution (<code>0x2460+</code>):</strong> IPL loads the Apploader binary (size + trailer from <code>0x2454</code>/<code>0x2458</code>) into RAM (typically <code>0x81200000</code>) and invokes its entry point. The Apploader registers callbacks with BS2 to stream the main <code>.dol</code> executable (from <code>boot.bin[0x0420]</code>) and <code>fst.bin</code> (from <code>boot.bin[0x0424]</code>) into main RAM, adjusting <code>ArenaHi</code> below <code>fst.bin</code>.</li>
+            <li><strong>Static Executable Entry (<code>.dol</code>):</strong> Once all <code>.dol</code> segments are copied and BSS is cleared, the Apploader returns the <code>.dol</code> entry point (header offset <code>0x00E0</code>). BS2 jumps to <code>__start</code>, which initializes PowerPC SDA/SDA2 base registers (<code>r13</code>, <code>r2</code>), Dolphin OS subsystems, and <code>main()</code>.</li>
+            <li><strong>Dynamic Linking (<code>.rel</code>) &amp; Disc Banner (<code>opening.bnr</code>):</strong> At runtime, titles may load relocatable <code>.rel</code> modules from the FST via <code>OSLink</code>/<code>OSLinkFixed</code>, while the IPL menu reads <code>opening.bnr</code> from the FST root to display the disc icon and localized metadata.</li>
+        </ol>
+    </section>
+
+    <section id="format-index">
+        <h2>Platform-Inherited Formats</h2>
+        <p>The following specifications document strictly platform-inherited GameCube binary formats defined by Nintendo hardware, the IPL/BS2 boot chain, and Dolphin OS:</p>
+        <div class="table-scroll" role="region" aria-label="GameCube platform formats" tabindex="0">
+            <table class="format-counts">
+                <caption>Nintendo GameCube Inherited Format Specifications</caption>
+                <thead>
+                    <tr>
+                        <th>Format</th>
+                        <th>Canonical Name(s)</th>
+                        <th>Magic / Marker</th>
+                        <th>Endianness</th>
+                        <th>Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><a href="../../index.html#gamecube-disc-image" target="_top">Disc Image &amp; FST</a></td>
+                        <td><code>.iso</code>, <code>.gcm</code>, <code>boot.bin</code>, <code>bi2.bin</code>, <code>fst.bin</code></td>
+                        <td><code>0xC2339F3D</code> at <code>0x001C</code></td>
+                        <td>Big-endian</td>
+                        <td>Raw 1.46 GB MiniDVD image layout, boot headers, Apploader container, and File System Table.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#gamecube-dol" target="_top">DOL Static Executable</a></td>
+                        <td><code>.dol</code> (<code>boot.dol</code>)</td>
+                        <td>None (structural header)</td>
+                        <td>Big-endian</td>
+                        <td>Primary static executable with up to 7 text and 11 data segments, BSS range, and entry point.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#gamecube-rel" target="_top">REL Relocatable Module</a></td>
+                        <td><code>.rel</code></td>
+                        <td>None (v1/v2/v3 header)</td>
+                        <td>Big-endian</td>
+                        <td>Dynamically linked PowerPC code/data modules loaded at runtime via <code>OSLink</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#gamecube-bnr" target="_top">Disc Banner</a></td>
+                        <td><code>opening.bnr</code></td>
+                        <td><code>BNR1</code> / <code>BNR2</code></td>
+                        <td>Big-endian</td>
+                        <td>IPL disc menu banner containing a 96&times;32 RGB5A3 tiled icon and 1 or 6 localized text slots.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <p>See the <a href="../../index.html#docs-guide" target="_top">PlatformDocs Documentation Guide</a> for scope rules, table conventions, and clean-room specification standards.</p>
+    </section>
+
+    <section id="scope-notes">
+        <h2>Scope &amp; Provenance Notes</h2>
+        <aside class="callout-warn">
+            <p><strong>Scope boundary:</strong> This section covers only formats inherited from GameCube hardware, IPL/BS2, and Dolphin OS. Game-specific archives, scripting, audio containers, and third-party emulator wrapper formats (such as <code>.gcz</code>, <code>.ciso</code>, or <code>.rvz</code>) are outside this specification.</p>
+        </aside>
+        <p>All multi-byte integers across GameCube disc structures, executables, relocatable modules, and banner pixels are big-endian unless a specific inner payload explicitly specifies otherwise. Retail GameCube discs do not use hardware AES encryption (unlike Nintendo Wii optical discs); the physical disc drive authenticates media via the Burst Cutting Area (BCA) and lead-in control data outside the user-readable <code>1,459,978,240</code>-byte image.</p>
+    </section>
+</body>
+</html>

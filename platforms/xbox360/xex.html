@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>.xex (XEX2 / XEX1) Executable Container — Xbox 360 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#xbox360" target="_top">Xbox 360</a><span>/</span><span>.xex (XEX2 / XEX1)</span></nav>
+
+    <h1>.xex — Xbox 360 Executable Container (XEX2 / XEX1)</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">Executable Container · Xbox 360 Kernel &amp; Hypervisor</p>
+        <p>Signed, hashed, optionally AES-128-CBC encrypted and LZX-compressed container wrapping a 32-bit PowerPC PE32 image alongside kernel security descriptors, page protection hashes, import ordinal tables, and embedded XDBF resources.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>default.xex</code>, <code>*.xex</code>, system modules (<code>xboxkrnl.exe</code>, <code>xam.xex</code>, <code>dash.xex</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>0x58455832</code> (<code>"XEX2"</code>, retail/SDK) &middot; <code>0x58455831</code> (<code>"XEX1"</code>, early devkit/beta)</dd>
+            <dt>Endianness</dt>
+            <dd>Hybrid: Big-Endian XEX container &amp; PPC32 instructions/data wrapping Little-Endian PE32/COFF headers</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Microsoft Xbox 360 (Xenon PPC64 BE in 32-bit pointer mode, Kernel &amp; Hypervisor)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Primary executable and shared library format (<code>application/x-xbox360-xex</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification" class="section">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Every executable, DLL, and system service module on Xbox 360 is packaged as an <strong>XEX</strong> container. Unlike standard Windows PE files loaded directly by the NT loader, the Xbox 360 kernel (<code>xboxkrnl.exe</code>) and Hypervisor require an outer security envelope containing RSA-2048 signatures, SHA-1 page descriptor digests, an encrypted AES-128 title key, execution/media restrictions, and a directory of typed optional headers.</p>
+        <p><strong>Hybrid Endianness Architecture:</strong> A parser must handle three distinct byte-order layers in a single XEX file:</p>
+        <ul>
+            <li><strong>Layer 1 — XEX Container (Big-Endian):</strong> The XEX header, optional header directory, optional header structs, security info, page descriptors, and import tables are all <strong>Big-Endian</strong>.</li>
+            <li><strong>Layer 2 — Embedded PE/COFF Headers (Little-Endian):</strong> Once decrypted and decompressed, the inner image begins with standard Windows PE32 headers (<code>MZ</code>, <code>PE\0\0</code>, COFF File Header with machine <code>0x01F2</code>, PE32 Optional Header magic <code>0x010B</code>, and 40-byte Section Headers) encoded in <strong>Little-Endian</strong>.</li>
+            <li><strong>Layer 3 — Mapped Sections (Big-Endian):</strong> The code (<code>.text</code>), read-only data (<code>.rdata</code>), initialized data (<code>.data</code>), and embedded <code>.spa</code> resources inside those PE sections are <strong>Big-Endian</strong> PowerPC 32-bit instructions and data.</li>
+        </ul>
+    </section>
+
+    <section id="layout" class="section">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>XEX2 Main File Header (0x18 bytes at file offset 0x00, Big-Endian)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>char[4]</code></td><td><code>Magic</code></td><td><code>"XEX2"</code> (<code>0x58455832</code>) or <code>"XEX1"</code> (<code>0x58455831</code>).</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32be</code></td><td><code>ModuleFlags</code></td><td>Module classification bitmask (title, exports, debugger, DLL, patch).</td></tr>
+                    <tr><td><code>0x08</code></td><td>4</td><td><code>u32be</code></td><td><code>SizeOfHeaders</code></td><td>Byte offset from file start to the encrypted/compressed PE payload.</td></tr>
+                    <tr><td><code>0x0C</code></td><td>4</td><td><code>u32be</code></td><td><code>SizeOfDiscardableHeaders</code></td><td>Size of header metadata discardable after initial validation.</td></tr>
+                    <tr><td><code>0x10</code></td><td>4</td><td><code>u32be</code></td><td><code>SecurityInfoOffset</code></td><td>File offset to <code>XEX_IMAGE_SECURITY_INFO</code> structure.</td></tr>
+                    <tr><td><code>0x14</code></td><td>4</td><td><code>u32be</code></td><td><code>HeaderDirectoryEntryCount</code></td><td>Number of 8-byte optional header entries immediately following at <code>0x18</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Optional Header Directory Entry (0x08 bytes per entry, starting at 0x18, Big-Endian)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>HeaderID</code></td><td>Identifier whose low byte (<code>HeaderID &amp; 0xFF</code>) defines value vs. offset encoding.</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32be</code></td><td><code>ValueOrOffset</code></td><td>Inline 32-bit value/flags if low byte is <code>0x00</code> or <code>0x01</code>; file offset otherwise.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Optional Header: Execution Info (ID 0x00040006, 0x18 bytes, Big-Endian)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>MediaID</code></td><td>Media identifier matching disc DMI / STFS metadata.</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32be</code></td><td><code>Version</code></td><td>Packed 4-part title version (major, minor, build, QFE).</td></tr>
+                    <tr><td><code>0x08</code></td><td>4</td><td><code>u32be</code></td><td><code>BaseVersion</code></td><td>Original base version (relevant for title updates/patches).</td></tr>
+                    <tr><td><code>0x0C</code></td><td>4</td><td><code>u32be</code></td><td><code>TitleID</code></td><td>Unique 32-bit title identifier (upper 16 bits publisher, lower 16 bits title).</td></tr>
+                    <tr><td><code>0x10</code></td><td>1</td><td><code>u8</code></td><td><code>Platform</code></td><td>Target platform byte (<code>0x00</code>–<code>0x02</code>).</td></tr>
+                    <tr><td><code>0x11</code></td><td>1</td><td><code>u8</code></td><td><code>ExecutableType</code></td><td>Executable classification byte.</td></tr>
+                    <tr><td><code>0x12</code></td><td>1</td><td><code>u8</code></td><td><code>DiscNum</code></td><td>1-based disc index in multi-disc sets.</td></tr>
+                    <tr><td><code>0x13</code></td><td>1</td><td><code>u8</code></td><td><code>DiscTotal</code></td><td>Total discs in set.</td></tr>
+                    <tr><td><code>0x14</code></td><td>4</td><td><code>u32be</code></td><td><code>SaveGameID</code></td><td>Identifier linking saves to the title.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Optional Header: File Format Info (ID 0x000003FF, variable length, Big-Endian)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>InfoSize</code></td><td>Total byte size of the File Format Info structure.</td></tr>
+                    <tr><td><code>0x04</code></td><td>2</td><td><code>u16be</code></td><td><code>EncryptionType</code></td><td><code>0</code> = Unencrypted, <code>1</code> = AES-128-CBC (Normal).</td></tr>
+                    <tr><td><code>0x06</code></td><td>2</td><td><code>u16be</code></td><td><code>CompressionType</code></td><td><code>0</code> = None, <code>1</code> = Basic, <code>2</code> = Normal (LZX), <code>3</code> = Delta.</td></tr>
+                    <tr><td><code>0x08</code></td><td>var</td><td><code>union</code></td><td><code>CompressionHeader</code></td><td>If Basic: <code>(InfoSize - 8) / 8</code> pairs of <code>{u32be DataSize, u32be ZeroSize}</code>. If Normal: <code>u32be WindowSize</code>, <code>u32be FirstBlockSize</code>, <code>u8[20] FirstBlockHash</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Optional Header: Resource Info (ID 0x000002FF) &amp; Import Libraries (ID 0x000103FF)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>ResourceInfo.Size</code></td><td>Total size of Resource Info table; followed by <code>(Size - 4) / 16</code> entries.</td></tr>
+                    <tr><td><code>+0x00</code></td><td>8</td><td><code>char[8]</code></td><td><code>ResourceEntry.Name</code></td><td>ASCII resource identifier (e.g., 8-hex-digit Title ID for embedded <code>.spa</code>).</td></tr>
+                    <tr><td><code>+0x08</code></td><td>4</td><td><code>u32be</code></td><td><code>ResourceEntry.Address</code></td><td>Virtual address in mapped image where resource begins.</td></tr>
+                    <tr><td><code>+0x0C</code></td><td>4</td><td><code>u32be</code></td><td><code>ResourceEntry.Size</code></td><td>Byte length of embedded resource.</td></tr>
+                    <tr><td><code>0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>Imports.Size</code></td><td>Total byte size of Import Libraries block.</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32be</code></td><td><code>Imports.StringTableSize</code></td><td>Byte length of null-terminated, 4-byte-padded library name table.</td></tr>
+                    <tr><td><code>0x08</code></td><td>4</td><td><code>u32be</code></td><td><code>Imports.LibraryCount</code></td><td>Number of import library records following the string table.</td></tr>
+                    <tr><td><code>+0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>LibRecord.Size</code></td><td>Byte size of this library record (<code>0x28 + RecordCount * 4</code>).</td></tr>
+                    <tr><td><code>+0x04</code></td><td>20</td><td><code>u8[20]</code></td><td><code>LibRecord.NextImportDigest</code></td><td>SHA-1 digest used for chained import verification.</td></tr>
+                    <tr><td><code>+0x18</code></td><td>4</td><td><code>u32be</code></td><td><code>LibRecord.ImportID</code></td><td>Library identifier.</td></tr>
+                    <tr><td><code>+0x1C</code></td><td>8</td><td><code>u32be[2]</code></td><td><code>LibRecord.Version / VersionMin</code></td><td>Required and minimum compatible library versions.</td></tr>
+                    <tr><td><code>+0x24</code></td><td>2</td><td><code>u16be</code></td><td><code>LibRecord.NameIndex</code></td><td>Index into the null-terminated import string table.</td></tr>
+                    <tr><td><code>+0x26</code></td><td>2</td><td><code>u16be</code></td><td><code>LibRecord.RecordCount</code></td><td>Number of <code>u32be</code> import thunk/data patch addresses at <code>+0x28</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>XEX2 Security Info (at SecurityInfoOffset, Big-Endian) &amp; Page Descriptors</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x000</code></td><td>4</td><td><code>u32be</code></td><td><code>HeaderSize</code></td><td>Size of security info header up to page descriptors (typically <code>0x184</code> + table).</td></tr>
+                    <tr><td><code>0x004</code></td><td>4</td><td><code>u32be</code></td><td><code>ImageSize</code></td><td>Total virtual address span of mapped PE image in bytes.</td></tr>
+                    <tr><td><code>0x008</code></td><td>256</td><td><code>u8[256]</code></td><td><code>RsaSignature</code></td><td>RSA-2048 signature verified by the Hypervisor/Kernel against Microsoft root key.</td></tr>
+                    <tr><td><code>0x108</code></td><td>4</td><td><code>u32be</code></td><td><code>Unknown / InfoSize</code></td><td>Security block info field (commonly <code>0x00000180</code> or section count context).</td></tr>
+                    <tr><td><code>0x10C</code></td><td>4</td><td><code>u32be</code></td><td><code>ImageFlags</code></td><td>Image-level security flags (including 4 KB vs. 64 KB page granularity).</td></tr>
+                    <tr><td><code>0x110</code></td><td>4</td><td><code>u32be</code></td><td><code>LoadAddress</code></td><td>Expected virtual load base address (e.g., <code>0x82000000</code>).</td></tr>
+                    <tr><td><code>0x114</code></td><td>20</td><td><code>u8[20]</code></td><td><code>SectionDigest</code></td><td>SHA-1 digest over the Page Descriptor table.</td></tr>
+                    <tr><td><code>0x128</code></td><td>4</td><td><code>u32be</code></td><td><code>ImportTableCount</code></td><td>Number of import library entries covered by <code>ImportTableDigest</code>.</td></tr>
+                    <tr><td><code>0x12C</code></td><td>20</td><td><code>u8[20]</code></td><td><code>ImportTableDigest</code></td><td>SHA-1 digest of import table records.</td></tr>
+                    <tr><td><code>0x140</code></td><td>16</td><td><code>u8[16]</code></td><td><code>MediaID</code></td><td>Allowed disc/content MediaID.</td></tr>
+                    <tr><td><code>0x150</code></td><td>16</td><td><code>u8[16]</code></td><td><code>AesKey</code></td><td>Per-image AES-128 key, itself encrypted with the retail or devkit master key.</td></tr>
+                    <tr><td><code>0x160</code></td><td>4</td><td><code>u32be</code></td><td><code>ExportTableAddress</code></td><td>Virtual address of export table (or <code>0</code>).</td></tr>
+                    <tr><td><code>0x164</code></td><td>20</td><td><code>u8[20]</code></td><td><code>HeaderDigest</code></td><td>SHA-1 digest covering XEX headers.</td></tr>
+                    <tr><td><code>0x178</code></td><td>4</td><td><code>u32be</code></td><td><code>GameRegion</code></td><td>Region lock bitmask (<code>0xFFFFFFFF</code> = region-free).</td></tr>
+                    <tr><td><code>0x17C</code></td><td>4</td><td><code>u32be</code></td><td><code>AllowedMediaTypes</code></td><td>Bitmask of authorized media devices (ODD, HDD, SVOD, etc.).</td></tr>
+                    <tr><td><code>0x180</code></td><td>4</td><td><code>u32be</code></td><td><code>PageDescriptorCount</code></td><td>Number of 24-byte page descriptors immediately following at <code>0x184</code>.</td></tr>
+                    <tr><td><code>+0x00</code></td><td>4</td><td><code>u32be</code></td><td><code>PageDesc.Value</code></td><td><code>SizeInPages = Value &gt;&gt; 4</code>; <code>PageInfo = Value &amp; 0xF</code>.</td></tr>
+                    <tr><td><code>+0x04</code></td><td>20</td><td><code>u8[20]</code></td><td><code>PageDesc.DataDigest</code></td><td>SHA-1 digest of the contiguous run of pages.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Embedded PE32 / PPC32 Image Headers (Little-Endian, inside decompressed payload)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>2</td><td><code>char[2]</code></td><td><code>e_magic</code></td><td><code>"MZ"</code> (<code>0x5A4D</code> LE) DOS stub header.</td></tr>
+                    <tr><td><code>0x3C</code></td><td>4</td><td><code>u32le</code></td><td><code>e_lfanew</code></td><td>Offset to NT PE signature.</td></tr>
+                    <tr><td><code>e_lfanew+0x00</code></td><td>4</td><td><code>u32le</code></td><td><code>Signature</code></td><td><code>"PE\0\0"</code> (<code>0x00004550</code> LE).</td></tr>
+                    <tr><td><code>e_lfanew+0x04</code></td><td>2</td><td><code>u16le</code></td><td><code>Machine</code></td><td><code>0x01F2</code> (PowerPC Big-Endian / Xbox 360 PPC32).</td></tr>
+                    <tr><td><code>e_lfanew+0x06</code></td><td>2</td><td><code>u16le</code></td><td><code>NumberOfSections</code></td><td>Count of 40-byte PE section headers after Optional Header.</td></tr>
+                    <tr><td><code>e_lfanew+0x18</code></td><td>2</td><td><code>u16le</code></td><td><code>OptHeader.Magic</code></td><td><code>0x010B</code> (PE32 32-bit pointer mode).</td></tr>
+                    <tr><td><code>e_lfanew+0x28</code></td><td>4</td><td><code>u32le</code></td><td><code>AddressOfEntryPoint</code></td><td>RVA of entry point (relative to <code>ImageBase</code>).</td></tr>
+                    <tr><td><code>e_lfanew+0x34</code></td><td>4</td><td><code>u32le</code></td><td><code>ImageBase</code></td><td>Preferred 32-bit load base (typically <code>0x82000000</code>).</td></tr>
+                    <tr><td><code>Sec+0x00</code></td><td>40</td><td><code>IMAGE_SECTION_HEADER</code></td><td><code>Section[i]</code></td><td>LE <code>Name[8]</code>, <code>VirtualSize</code>, <code>VirtualAddress</code>, <code>SizeOfRawData</code>, <code>PointerToRawData</code>, <code>Characteristics</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags" class="section">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>Optional Header ID Encoding</h3>
+        <p>Every entry in the Optional Header Directory uses the low byte of <code>HeaderID</code> (<code>sizeCode = HeaderID &amp; 0xFF</code>) to specify how <code>ValueOrOffset</code> is interpreted:</p>
+        <ul>
+            <li><code>sizeCode == 0x00</code> or <code>0x01</code>: <code>ValueOrOffset</code> is an <strong>inline 32-bit value or bitfield</strong> (for example, <code>0x00010100</code> Entry Point, <code>0x00010201</code> Image Base Address, <code>0x00020200</code> Default Stack Size).</li>
+            <li><code>0x02 &lt;= sizeCode &lt;= 0xFE</code>: <code>ValueOrOffset</code> is a <strong>file offset</strong> to a fixed-length structure of size <code>sizeCode * 4</code> bytes (for example, <code>0x00040006</code> Execution Info has <code>sizeCode = 6</code> &rarr; <code>24</code> bytes; <code>0x00020104</code> TLS Info has <code>sizeCode = 4</code> &rarr; <code>16</code> bytes).</li>
+            <li><code>sizeCode == 0xFF</code>: <code>ValueOrOffset</code> is a <strong>file offset</strong> to a variable-length structure whose first <code>u32be</code> word specifies its total byte length (for example, <code>0x000002FF</code> Resource Info, <code>0x000003FF</code> File Format Info, <code>0x000103FF</code> Import Libraries, <code>0x000183FF</code> Original PE Name, <code>0x000200FF</code> Static Libraries).</li>
+        </ul>
+
+        <h3>ModuleFlags, Compression, Encryption &amp; Page Size</h3>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>XEX2 Enumerations &amp; Bitmasks</caption>
+                <thead>
+                    <tr><th>Field</th><th>Value / Mask</th><th>Name</th><th>Meaning</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>ModuleFlags</code></td><td><code>0x00000001</code></td><td><code>TITLE</code></td><td>Standard game/title executable.</td></tr>
+                    <tr><td><code>ModuleFlags</code></td><td><code>0x00000002</code></td><td><code>EXPORTS_TO_TITLE</code></td><td>System/DLL module exporting symbols to titles.</td></tr>
+                    <tr><td><code>ModuleFlags</code></td><td><code>0x00000004</code></td><td><code>SYSTEM_DEBUGGER</code></td><td>Debugger/devkit component.</td></tr>
+                    <tr><td><code>ModuleFlags</code></td><td><code>0x00000008</code></td><td><code>DLL_MODULE</code></td><td>Dynamically loaded library (<code>.xex</code> DLL).</td></tr>
+                    <tr><td><code>ModuleFlags</code></td><td><code>0x00000010 / 0x20 / 0x40</code></td><td><code>PATCH / FULL / DELTA</code></td><td>Title update / executable patch container flags.</td></tr>
+                    <tr><td><code>ModuleFlags</code></td><td><code>0x00000080</code></td><td><code>USER_MODE</code></td><td>Executes in user mode (ring 3) rather than kernel mode.</td></tr>
+                    <tr><td><code>EncryptionType</code></td><td><code>0 / 1</code></td><td><code>NONE / NORMAL</code></td><td>Unencrypted vs. AES-128-CBC (16-byte zero IV) over payload stream.</td></tr>
+                    <tr><td><code>CompressionType</code></td><td><code>0 / 1 / 2 / 3</code></td><td><code>NONE / BASIC / NORMAL / DELTA</code></td><td>Raw, zero-fill blocks, chunked LZX stream, or binary patch delta.</td></tr>
+                    <tr><td><code>ImageFlags</code></td><td><code>0x10000000</code></td><td><code>SMALL_PAGES</code></td><td>When set, page descriptor granularity is 4 KB (<code>0x1000</code>); otherwise 64 KB (<code>0x10000</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>LZX Normal Compression Block Chaining</h3>
+        <p>When <code>CompressionType == 2</code> (Normal), the decrypted payload (after AES-128-CBC decryption, if encrypted) consists of chained blocks starting with <code>FirstBlockSize</code> (from File Format Info):</p>
+        <ol>
+            <li>Each block begins with a 24-byte block header: <code>u32be NextBlockSize</code> and <code>u8[20] NextBlockHash</code> (SHA-1 digest of the next block, used for streaming verification).</li>
+            <li>The remaining <code>CurrentBlockSize - 24</code> bytes contain one or more compressed chunks prefixed by <code>u16be CompressedChunkSize</code>, followed by exactly <code>CompressedChunkSize</code> bytes of LZX bitstream data.</li>
+            <li>Chunk reading continues until <code>CompressedChunkSize == 0</code> or the block ends, concatenating the extracted chunks across all chained blocks into a contiguous LZX bitstream (decoded in standard 32 KiB / <code>0x8000</code>-byte LZX frames using the declared <code>WindowSize</code>); block chaining terminates when <code>NextBlockSize == 0</code>.</li>
+        </ol>
+    </section>
+
+    <section id="edge-cases" class="section">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>XEX1 (<code>0x58455831</code>) vs. XEX2 (<code>0x58455832</code>):</strong> Early XDK pre-retail builds use <code>XEX1</code>, which has a smaller Security Info header before the page descriptor list (omitting later XEX2 fields such as <code>ExportTableAddress</code> and <code>HeaderDigest</code> at those exact offsets) and uses early devkit key material. Always dispatch Security Info parsing by checking <code>Magic</code>.</li>
+            <li><strong>Encryption Precedes Compression:</strong> When both <code>EncryptionType == 1</code> and <code>CompressionType != 0</code> are set, the entire payload starting at <code>SizeOfHeaders</code> must be decrypted with AES-128-CBC (zero IV) <em>before</em> interpreting Basic block headers or Normal LZX block headers.</li>
+            <li><strong>Basic Compression (<code>CompressionType == 1</code>):</strong> No LZX decoder is required. For each <code>{DataSize, ZeroSize}</code> descriptor in File Format Info, copy <code>DataSize</code> bytes from the decrypted stream into the output buffer and emit <code>ZeroSize</code> zero bytes (representing uninitialized <code>.bss</code> or alignment gaps).</li>
+            <li><strong>PE Section Mapping &amp; Truncated Raw Data:</strong> When mapping the unpacked PE32 image to virtual memory at <code>ImageBase</code>, <code>VirtualSize</code> often exceeds <code>SizeOfRawData</code>. Fill <code>[VirtualAddress .. VirtualAddress + SizeOfRawData)</code> from <code>PointerToRawData</code> and zero-fill the remainder up to <code>VirtualSize</code>. Some tool-extracted PE images already mirror virtual layout on disk; verify whether <code>PointerToRawData</code> matches <code>VirtualAddress</code> or file offsets.</li>
+            <li><strong>Generalized Import Resolution (<code>xboxkrnl.exe</code> / <code>xam.xex</code>):</strong> Import records in <code>0x000103FF</code> point to 32-bit slots inside the mapped PE image. Each slot encodes an import entry (such as <code>(LibraryIndex &lt;&lt; 24) | Ordinal</code> and a type indicator distinguishing function call thunks from imported kernel variables). At runtime, the loader patches function thunk slots with PowerPC branch/jump trampolines (e.g., <code>lis</code> / <code>ori</code> / <code>mtctr</code> / <code>bctr</code>) targeting the resolved ordinal in <code>xboxkrnl.exe</code> or <code>xam.xex</code>, and patches variable slots with the exported data address.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode" class="section">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function ParseXex2(stream, masterKeySelector):
+    magic = stream.ReadBytes(0x00, 4)
+    assert magic == "XEX2"  # XEX1 uses an earlier SecurityInfo layout
+
+    moduleFlags = stream.ReadU32BE(0x04)
+    sizeOfHeaders = stream.ReadU32BE(0x08)
+    securityOffset = stream.ReadU32BE(0x10)
+    optCount = stream.ReadU32BE(0x14)
+
+    optHeaders = {}
+    for i in 0 .. optCount - 1:
+        entryOff = 0x18 + i * 8
+        hid = stream.ReadU32BE(entryOff)
+        val = stream.ReadU32BE(entryOff + 4)
+        low = hid &amp; 0xFF
+        if low == 0x00 or low == 0x01:
+            optHeaders[hid] = { kind: "inline", value: val }
+        elif low == 0xFF:
+            sz = stream.ReadU32BE(val)
+            optHeaders[hid] = { kind: "bytes", offset: val, data: stream.ReadBytes(val, sz) }
+        else:
+            optHeaders[hid] = { kind: "bytes", offset: val, data: stream.ReadBytes(val, low * 4) }
+
+    # Security Info
+    secImageSize = stream.ReadU32BE(securityOffset + 0x004)
+    imageFlags = stream.ReadU32BE(securityOffset + 0x10C)
+    loadAddress = stream.ReadU32BE(securityOffset + 0x110)
+    encryptedAesKey = stream.ReadBytes(securityOffset + 0x150, 16)
+    pageSize = (imageFlags &amp; 0x10000000) != 0 ? 0x1000 : 0x10000
+
+    # Payload extraction (decryption -&gt; decompression)
+    rawPayload = stream.ReadBytes(sizeOfHeaders, stream.Length - sizeOfHeaders)
+    fmt = optHeaders[0x000003FF].data
+    encType = ReadU16BE(fmt, 0x04)
+    compType = ReadU16BE(fmt, 0x06)
+
+    if encType == 1:
+        titleKey = DecryptTitleKey(encryptedAesKey, masterKeySelector)
+        payload = Aes128CbcDecrypt(rawPayload, titleKey, iv=0x00*16)
+    else:
+        payload = rawPayload
+
+    if compType == 0:
+        peBytes = payload
+    elif compType == 1:  # Basic
+        peBytes = ByteBuffer()
+        pos = 0
+        for off in range(8, len(fmt), 8):
+            dataSz = ReadU32BE(fmt, off)
+            zeroSz = ReadU32BE(fmt, off + 4)
+            peBytes.Append(payload[pos : pos + dataSz])
+            peBytes.AppendZeros(zeroSz)
+            pos += dataSz
+    elif compType == 2:  # Normal (LZX)
+        windowSize = ReadU32BE(fmt, 0x08)
+        blockSize = ReadU32BE(fmt, 0x0C)
+        lzxStream = ByteBuffer()
+        pos = 0
+        while blockSize &gt; 0:
+            nextSize = ReadU32BE(payload, pos)
+            # nextHash = payload[pos + 4 : pos + 24]
+            cursor = pos + 24
+            blockEnd = pos + blockSize
+            while cursor &lt; blockEnd:
+                chunkSize = ReadU16BE(payload, cursor)
+                cursor += 2
+                if chunkSize == 0:
+                    break
+                lzxStream.Append(payload[cursor : cursor + chunkSize])
+                cursor += chunkSize
+            pos = blockEnd
+            blockSize = nextSize
+        peBytes = DecompressLzxFrames(lzxStream, windowSize, frameSize=0x8000, outputSize=secImageSize)
+
+    # Parse Little-Endian PE32 headers inside peBytes
+    assert peBytes[0:2] == "MZ"
+    peOff = ReadU32LE(peBytes, 0x3C)
+    assert peBytes[peOff : peOff + 4] == "PE\0\0"
+    numSections = ReadU16LE(peBytes, peOff + 0x06)
+    optSize = ReadU16LE(peBytes, peOff + 0x14)
+    secTableOff = peOff + 0x18 + optSize
+    # Map sections to virtual memory at loadAddress and resolve 0x000103FF imports
+    return { LoadAddress: loadAddress, ImageSize: secImageSize, PEImage: peBytes, OptionalHeaders: optHeaders }</code></pre>
+    </section>
+
+    <section id="provenance" class="section">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn">
+            <p><strong>Cryptographic &amp; Key Material Caveat:</strong> Retail Xbox 360 executables are signed with Microsoft's private RSA-2048 keys and have their per-image <code>AesKey</code> encrypted under the retail console key (whereas devkit XEXs use separate devkit key material). <strong>No retail or devkit Microsoft cryptographic keys are embedded in this specification.</strong> Clean-room parsers require externally supplied keys (or unencrypted/devkit dumps) to decrypt <code>EncryptionType == 1</code> retail binaries.</p>
+        </aside>
+        <ul>
+            <li><strong>High Confidence (Confirmed Container Spec):</strong> XEX2 main header layout, optional header ID low-byte encoding rules, File Format Info (`Basic` and `Normal` LZX chunking), Execution Info, Resource Info, Import Libraries, and Security Info offsets are established across official XDK definitions and open-source Xbox 360 loaders/analysis tools.</li>
+            <li><strong>SDK-Revision &amp; Environment Dependent:</strong> Optional header IDs added in later dashboard/SDK revisions (e.g., newer rating/kinect/system capability flags) and <code>XEX1</code> pre-retail layouts vary by SDK build. Delta patches (<code>CompressionType == 3</code>) depend on matching the exact <code>BaseVersion</code> image.</li>
+        </ul>
+    </section>
+</body>
+</html>

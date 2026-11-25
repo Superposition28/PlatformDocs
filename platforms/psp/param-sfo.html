@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PARAM.SFO (PSF) Binary Table &amp; PSP Keys — PlayStation Portable — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#psp" target="_top">PlayStation Portable</a>
+        <span>/</span>
+        <span>PARAM.SFO Metadata Table</span>
+    </nav>
+
+    <h1>PARAM.SFO PSF Binary Table &amp; PSP Metadata Keys</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">PSP System Parameter Table · Little-Endian</p>
+        <p><code>PARAM.SFO</code> uses Sony's binary Parameter System File (<code>\x00PSF</code>) key-value table format to describe UMD discs, Memory Stick <code>EBOOT.PBP</code> packages, firmware updaters, and savedata directories for the PSP XMB and kernel loader.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>PARAM.SFO</code> (in <code>PSP_GAME/PARAM.SFO</code>, <code>ms0:/PSP/SAVEDATA/*/PARAM.SFO</code>, or slot 0 of <code>EBOOT.PBP</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>00 50 53 46</code> (<code>"\x00PSF"</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (<code>u16le</code>, <code>u32le</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation Portable System Software / XMB (PSF v1.1 table format shared across Sony consoles, scoped here to PSP keys)</dd>
+            <dt>Role/MIME</dt>
+            <dd>System parameter &amp; title metadata table (<code>application/x-ps-sfo</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout</a></li>
+            <li><a href="#flags">3. Data Formats &amp; Canonical PSP Keys</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification" class="section">
+        <h2>1. Identification &amp; Scope</h2>
+        <p><code>PARAM.SFO</code> files begin with the 4-byte signature <code>00 50 53 46</code> (<code>\x00PSF</code>) and version <code>0x00000101</code> (1.1). Every numeric field in the header, index table, and <code>0x0404</code> integer values is little-endian.</p>
+        <p>Although the PSF binary container is shared with later Sony consoles (PS3/PS4), this specification covers the PSP v1.1 layout and the PSP-specific keys read by the PSP XMB, UMD loader, and savedata utility.</p>
+    </section>
+
+    <section id="layout" class="section">
+        <h2>2. Binary Layout</h2>
+        <p>A PSF file consists of four contiguous regions: a 20-byte header, an array of 16-byte index records, a packed NUL-terminated ASCII key table, and a 4-byte-aligned value data table.</p>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PSF Header (20 / 0x14 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u8[4]</code></td>
+                        <td><code>magic</code></td>
+                        <td>Constant signature <code>00 50 53 46</code> (<code>\x00PSF</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>version</code></td>
+                        <td>PSF format version: <code>0x00000101</code> (bytes <code>01 01 00 00</code> = v1.1)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>key_table_offset</code></td>
+                        <td>Absolute byte offset to the Key Table (typically <code>0x14 + tables_entries * 0x10</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>data_table_offset</code></td>
+                        <td>Absolute byte offset to the Data Table (4-byte aligned)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>tables_entries</code></td>
+                        <td>Number of parameter entries <code>N</code> in the Index Table</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PSF Index Table Entry (16 / 0x10 bytes per entry, starting at 0x14)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>key_offset</code></td>
+                        <td>Offset relative to <code>key_table_offset</code> to NUL-terminated ASCII key name</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>data_fmt</code></td>
+                        <td>Value encoding type (<code>0x0004</code>, <code>0x0204</code>, or <code>0x0404</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>data_len</code></td>
+                        <td>Used byte length of the value (for <code>0x0204</code> strings, includes trailing <code>0x00</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>data_max_len</code></td>
+                        <td>Allocated slot size in Data Table (4-byte aligned; <code>data_len &lt;= data_max_len</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>data_offset</code></td>
+                        <td>Offset relative to <code>data_table_offset</code> to this entry's value slot</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags" class="section">
+        <h2>3. Data Formats &amp; Canonical PSP Keys</h2>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PSF <code>data_fmt</code> Encodings</caption>
+                <thead>
+                    <tr>
+                        <th>Value</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Name</th>
+                        <th>Decoding Rule</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0004</code></td>
+                        <td>Variable</td>
+                        <td><code>u8[data_len]</code></td>
+                        <td><code>utf8-S</code> (Binary / Special UTF-8)</td>
+                        <td>Exact <code>data_len</code> raw bytes; not guaranteed to be NUL-terminated (used for <code>SAVEDATA_PARAMS</code>, <code>SAVEDATA_FILE_LIST</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0204</code></td>
+                        <td>Variable</td>
+                        <td><code>char[data_len]</code></td>
+                        <td><code>utf8</code> (String)</td>
+                        <td>NUL-terminated UTF-8 text; <code>data_len</code> includes the trailing <code>0x00</code> byte and remaining bytes up to <code>data_max_len</code> are zero-padded</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0404</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>int32</code> / <code>uint32</code></td>
+                        <td>32-bit little-endian integer; <code>data_len == 4</code> and <code>data_max_len == 4</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Canonical PSP <code>PARAM.SFO</code> Keys</caption>
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Max Len</th>
+                        <th><code>data_fmt</code></th>
+                        <th>Scope</th>
+                        <th>Meaning &amp; Standard Values</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>BOOTABLE</code></td>
+                        <td>4</td>
+                        <td><code>0x0404</code></td>
+                        <td>UMD / PBP</td>
+                        <td><code>1</code> = executable package can be launched from XMB; <code>0</code> = non-bootable data/media</td>
+                    </tr>
+                    <tr>
+                        <td><code>CATEGORY</code></td>
+                        <td>4</td>
+                        <td><code>0x0204</code></td>
+                        <td>All PSP</td>
+                        <td>2-char type code: <code>"UG"</code> UMD Game, <code>"MG"</code> Memory Stick Game, <code>"MS"</code> Save Data, <code>"ME"</code> PS1 Classics/Emulator, <code>"PG"</code> Updater/Patch, <code>"EG"</code> Digital App, <code>"UV"</code> UMD Video, <code>"UA"</code> UMD Audio</td>
+                    </tr>
+                    <tr>
+                        <td><code>DISC_ID</code></td>
+                        <td>16</td>
+                        <td><code>0x0204</code></td>
+                        <td>UMD / PBP</td>
+                        <td>9-character product code without hyphen (e.g., <code>"UCUS98600"</code>, <code>"ULES00000"</code>) or synthetic ID on unsigned PBPs</td>
+                    </tr>
+                    <tr>
+                        <td><code>DISC_NUMBER</code></td>
+                        <td>4</td>
+                        <td><code>0x0404</code></td>
+                        <td>UMD / PBP</td>
+                        <td>1-based disc index in multi-disc releases (typically <code>1</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>DISC_TOTAL</code></td>
+                        <td>4</td>
+                        <td><code>0x0404</code></td>
+                        <td>UMD / PBP</td>
+                        <td>Total disc count in release (typically <code>1</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>DISC_VERSION</code></td>
+                        <td>8</td>
+                        <td><code>0x0204</code></td>
+                        <td>UMD / PBP</td>
+                        <td>Package software version string (e.g., <code>"1.00"</code>, <code>"1.01"</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>MEMSIZE</code></td>
+                        <td>4</td>
+                        <td><code>0x0404</code></td>
+                        <td>PSP-2000+</td>
+                        <td>Optional flag; <code>1</code> requests unlocked 64 MiB main RAM partition on PSP-2000+ hardware</td>
+                    </tr>
+                    <tr>
+                        <td><code>PARENTAL_LEVEL</code></td>
+                        <td>4</td>
+                        <td><code>0x0404</code></td>
+                        <td>UMD / PBP</td>
+                        <td>System parental control threshold (<code>1</code> through <code>11</code>; <code>0</code> in some unsigned packages)</td>
+                    </tr>
+                    <tr>
+                        <td><code>PSP_SYSTEM_VER</code></td>
+                        <td>8</td>
+                        <td><code>0x0204</code></td>
+                        <td>UMD / PBP</td>
+                        <td>Minimum required PSP firmware version string (e.g., <code>"1.00"</code>, <code>"2.00"</code>, <code>"6.60"</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>REGION</code></td>
+                        <td>4</td>
+                        <td><code>0x0404</code></td>
+                        <td>UMD / PBP</td>
+                        <td>Region bitmask; <code>0x8000</code> denotes all regions / region-free</td>
+                    </tr>
+                    <tr>
+                        <td><code>TITLE</code></td>
+                        <td>128</td>
+                        <td><code>0x0204</code></td>
+                        <td>All PSP</td>
+                        <td>Default UTF-8 display title shown on the XMB</td>
+                    </tr>
+                    <tr>
+                        <td><code>TITLE_0</code> .. <code>TITLE_11</code></td>
+                        <td>128</td>
+                        <td><code>0x0204</code></td>
+                        <td>Localized XMB</td>
+                        <td>Optional per-language UTF-8 titles (index order: JA, EN, FR, ES, DE, IT, NL, PT, RU, KO, ZH-TW, ZH-CN; higher indices added in later firmware)</td>
+                    </tr>
+                    <tr>
+                        <td><code>SAVEDATA_DIRECTORY</code></td>
+                        <td>64</td>
+                        <td><code>0x0204</code></td>
+                        <td>Save (<code>MS</code>)</td>
+                        <td>Directory name under <code>ms0:/PSP/SAVEDATA/</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>SAVEDATA_DETAIL</code></td>
+                        <td>1024</td>
+                        <td><code>0x0204</code></td>
+                        <td>Save (<code>MS</code>)</td>
+                        <td>Multi-line UTF-8 save description text</td>
+                    </tr>
+                    <tr>
+                        <td><code>SAVEDATA_FILE_LIST</code></td>
+                        <td>Variable</td>
+                        <td><code>0x0004</code></td>
+                        <td>Save (<code>MS</code>)</td>
+                        <td>Binary record table listing filenames and cryptographic MACs/hashes for files in the save directory (typically 32-byte records: 13B filename + 3B pad + 16B hash)</td>
+                    </tr>
+                    <tr>
+                        <td><code>SAVEDATA_PARAMS</code></td>
+                        <td>128</td>
+                        <td><code>0x0004</code></td>
+                        <td>Save (<code>MS</code>)</td>
+                        <td>128-byte binary header/key-verification block used by PSP savedata crypto</td>
+                    </tr>
+                    <tr>
+                        <td><code>SAVEDATA_TITLE</code></td>
+                        <td>128</td>
+                        <td><code>0x0204</code></td>
+                        <td>Save (<code>MS</code>)</td>
+                        <td>Secondary save slot subtitle displayed beneath <code>TITLE</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="edge-cases" class="section">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>Lexicographical key ordering:</strong> Official PSP firmware tools always emit Index Table entries sorted in strictly ascending ASCII byte order of key names. Unsorted entries can fail binary lookup or validation in official XMB parsers.</li>
+            <li><strong>4-byte alignment padding:</strong> The Key Table ends with zero padding bytes so that <code>data_table_offset</code> is aligned to a 4-byte boundary. Likewise, each value slot's <code>data_max_len</code> is typically rounded up to a multiple of 4.</li>
+            <li><strong><code>0x0204</code> length vs. capacity:</strong> Always slice UTF-8 strings using <code>data_len</code> and strip the trailing NUL byte (or stop at the first <code>0x00</code> within <code>data_len</code>). Do not assume <code>data_max_len - data_len</code> bytes are valid text, and do not fail if third-party tools omit the NUL byte inside <code>data_len</code> while leaving zero padding inside <code>data_max_len</code>.</li>
+            <li><strong><code>0x0004</code> binary payloads:</strong> Keys with <code>data_fmt == 0x0004</code> (<code>SAVEDATA_PARAMS</code>, <code>SAVEDATA_FILE_LIST</code>) contain arbitrary binary data including embedded <code>0x00</code> bytes; parsers must return raw bytes of exact length <code>data_len</code>.</li>
+            <li><strong>Bounds checks:</strong> Enforce <code>key_table_offset &gt;= 0x14 + tables_entries * 16</code>, <code>key_table_offset &lt;= data_table_offset &lt;= file_size</code>, <code>data_len &lt;= data_max_len</code>, and <code>data_table_offset + data_offset + data_max_len &lt;= file_size</code>.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode" class="section">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function parse_param_sfo(buf):
+    if len(buf) &lt; 0x14:
+        error("File smaller than 20-byte PSF header")
+    if buf[0x00:0x04] != b"\x00PSF":
+        error("Invalid PSF magic")
+
+    version           = read_u32le(buf, 0x04)
+    key_table_offset  = read_u32le(buf, 0x08)
+    data_table_offset = read_u32le(buf, 0x0C)
+    entry_count       = read_u32le(buf, 0x10)
+
+    index_end = 0x14 + entry_count * 16
+    if index_end &gt; key_table_offset or key_table_offset &gt; data_table_offset or data_table_offset &gt; len(buf):
+        error("Invalid PSF table offsets")
+
+    entries = {}
+    for i in range(entry_count):
+        base         = 0x14 + i * 16
+        key_offset   = read_u16le(buf, base + 0x00)
+        data_fmt     = read_u16le(buf, base + 0x02)
+        data_len     = read_u32le(buf, base + 0x04)
+        data_max_len = read_u32le(buf, base + 0x08)
+        data_offset  = read_u32le(buf, base + 0x0C)
+
+        k_start = key_table_offset + key_offset
+        if k_start &gt;= data_table_offset:
+            error("Key offset out of bounds")
+        k_end = find_byte(buf, 0x00, start=k_start, end=data_table_offset)
+        if k_end is None:
+            error("Unterminated key string")
+        key_name = decode_ascii(buf[k_start:k_end])
+
+        d_start = data_table_offset + data_offset
+        if data_len &gt; data_max_len or d_start + data_max_len &gt; len(buf):
+            error("Data slice out of bounds for key " + key_name)
+
+        raw = buf[d_start : d_start + data_len]
+        if data_fmt == 0x0404:
+            if data_len != 4:
+                error("Invalid integer length for key " + key_name)
+            value = read_u32le(raw, 0)
+        elif data_fmt == 0x0204:
+            value = decode_utf8(raw.rstrip(b"\x00"))
+        elif data_fmt == 0x0004:
+            value = raw
+        else:
+            value = raw  # preserve unknown format bytes
+
+        entries[key_name] = {
+            "format": data_fmt,
+            "max_len": data_max_len,
+            "value": value
+        }
+
+    return {"version": version, "entries": entries}</code></pre>
+    </section>
+
+    <section id="provenance" class="section">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>The PSF v1.1 header, 16-byte index record, <code>0x0004</code>/<code>0x0204</code>/<code>0x0404</code> format codes, and core PSP keys (<code>BOOTABLE</code>, <code>CATEGORY</code>, <code>DISC_ID</code>, <code>PSP_SYSTEM_VER</code>, <code>PARENTAL_LEVEL</code>, <code>TITLE</code>, <code>MEMSIZE</code>) are <strong>confirmed</strong> across retail UMD, Memory Stick, and savedata files.</p>
+        <aside class="callout-warn">
+            <p><strong>Firmware-dependent keys &amp; savedata crypto:</strong> Localized title keys (<code>TITLE_0</code> through <code>TITLE_11</code>) expanded across PSP system software updates as additional XMB languages (such as Russian and Chinese) were added. Additionally, the exact cryptographic contents inside <code>SAVEDATA_PARAMS</code> and <code>SAVEDATA_FILE_LIST</code> depend on Kirk/savedata firmware key versions and are documented here only at container-field level.</p>
+        </aside>
+    </section>
+</body>
+</html>

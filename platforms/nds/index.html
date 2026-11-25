@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nintendo DS (NTR / TWL) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><span>Nintendo DS</span>
+    </nav>
+
+    <h1>Nintendo DS (NTR / TWL)</h1>
+
+    <section class="format-summary" aria-label="Platform summary">
+        <p class="eyebrow">Platform Architecture &amp; Inherited Formats · Dual-ARM Handheld</p>
+        <p>The Nintendo DS (hardware code <strong>NTR</strong>, later extended by Nintendo DSi <strong>TWL</strong>) is a dual-processor ARM handheld built around an <strong>ARM946E-S</strong> main CPU and an <strong>ARM7TDMI</strong> sub-processor booting from Slot-1 Nitro Game Cards. Applications link against the Nintendo Nitro SDK and inherit standardized cartridge headers, NitroFS file tables, ARM overlay descriptors, UTF-16LE localized title banners, and Nitro archive/audio/compression containers.</p>
+        <dl>
+            <dt>Main CPU</dt>
+            <dd>ARM946E-S (ARMv5TEJ, 67.028 MHz in NTR mode; up to 134.056 MHz in TWL mode), 8 KiB I-cache, 4 KiB D-cache, 32 KiB ITCM, 16 KiB DTCM.</dd>
+            <dt>Sub CPU</dt>
+            <dd>ARM7TDMI (ARMv4T, 33.514 MHz), 64 KiB dedicated WRAM; handles audio mixing, SPI flash/touchscreen/RTC, Wi-Fi, and IPC.</dd>
+            <dt>Main Memory</dt>
+            <dd>4 MiB Main RAM at <code>0x02000000–0x023FFFFF</code> (expanded to 16 MiB at <code>0x02000000–0x02FFFFFF</code> on DSi TWL), plus 32 KiB shared WRAM.</dd>
+            <dt>Boot Media</dt>
+            <dd>Slot-1 Nitro Card (ROM + SPI save memory), authenticated via header CRC-16, Nintendo Logo CRC-16, and Blowfish KEY1 Secure Area.</dd>
+            <dt>Endianness</dt>
+            <dd>Strictly little-endian across both ARM cores and all Nitro SDK binary containers.</dd>
+        </dl>
+    </section>
+
+    <section id="architecture">
+        <h2>Nitro Card &amp; Dual-CPU Boot Architecture</h2>
+        <p>At power-on, internal ARM9 and ARM7 boot ROMs initialize hardware and read the cartridge header at ROM offset <code>0x0000</code>. Unlike memory-mapped GBA Game Paks, Slot-1 Nitro Cards are accessed sequentially over an 8-byte command bus controlled by <code>REG_ROMCTRL</code> (<code>0x040001A4</code>). The firmware validates the compressed Nintendo logo bitmap and header checksums, loads the static ARM9 and ARM7 binaries into their respective target RAM addresses, decrypts the 16 KiB Secure Area (<code>0x4000–0x7FFF</code>) if present, and jumps to the two CPU entry points.</p>
+        <p>Because Main RAM is 4 MiB on retail NTR hardware, larger binaries split code into dynamically paged overlays indexed by <code>y9.bin</code> and <code>y7.bin</code> and stored inside the NitroFS File Allocation Table (FAT). Data assets are addressed either by 16-bit FAT file IDs or hierarchical directory paths in the File Name Table (FNT), and routinely packaged using Nitro SDK container and BIOS compression primitives.</p>
+    </section>
+
+    <section id="format-index">
+        <h2>Platform-Inherited Format Index</h2>
+        <p>All specifications below cover formats inherited directly from Nintendo DS hardware, firmware, or the official Nitro SDK. Game-specific and engine-specific formats are excluded.</p>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Nintendo DS Platform Format Specifications</caption>
+                <thead>
+                    <tr>
+                        <th>Specification</th>
+                        <th>Canonical Files / IDs</th>
+                        <th>Primary Magic</th>
+                        <th>Summary</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><a href="../../index.html#nds-nds-rom" target="_top">Cartridge ROM &amp; NitroFS</a></td>
+                        <td><code>*.nds</code>, <code>*.srl</code></td>
+                        <td>Logo CRC <code>0xCF56</code></td>
+                        <td>512-byte NTR / 4 KiB TWL header, Secure Area, FAT, and FNT directory tree.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#nds-overlay-arm" target="_top">ARM9/ARM7 Overlays &amp; BLZ</a></td>
+                        <td><code>y9.bin</code>, <code>y7.bin</code></td>
+                        <td>32-byte records; BLZ footer</td>
+                        <td>Dynamic RAM overlay descriptors and Nitro SDK backwards-LZ (BLZ) code compression.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#nds-banner-icon" target="_top">Icon &amp; Localized Title Banner</a></td>
+                        <td><code>banner.bin</code> (embedded)</td>
+                        <td>Version <code>0x0001</code>–<code>0x0103</code></td>
+                        <td>4bpp tiled 32×32 icon, BGR555 palette, UTF-16LE titles, and DSi animated frames.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#nds-nitro-sdk" target="_top">Nitro SDK Containers &amp; BIOS LZ</a></td>
+                        <td><code>*.narc</code>, <code>*.carc</code>, <code>*.sdat</code></td>
+                        <td><code>NARC</code>, <code>SDAT</code>, <code>0x10</code>/<code>0x11</code></td>
+                        <td>NARC/CARC archive chunks, SDAT sound archive header, and BIOS LZ10/LZ11 streams.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="memory-map">
+        <h2>Generalized Loader &amp; Memory Constraints</h2>
+        <p>Standard NTR loaders enforce strict address boundaries when placing static binaries and overlays:</p>
+        <ul>
+            <li><strong>ARM9 Main RAM Window:</strong> Static ARM9 binaries and overlays load into <code>0x02000000–0x023BFE00</code> (leaving upper Main RAM reserved for shared IPC structures, SDK heaps, and system buffers).</li>
+            <li><strong>ARM7 Target Regions:</strong> Static ARM7 binaries load either into Main RAM (typically near <code>0x02380000</code>) or into ARM7-side WRAM spanning up to 96 KiB (<code>0x037F8000–0x037FFFFF</code> for 32 KiB shared WRAM when mapped to ARM7, plus <code>0x03800000–0x0380FFFF</code> for 64 KiB dedicated ARM7 WRAM).</li>
+            <li><strong>DSi Extended Binaries:</strong> Hybrid (<code>unit_code = 0x02</code>) and DSi-exclusive (<code>unit_code = 0x03</code>) images add secondary <code>ARM9i</code> and <code>ARM7i</code> segments configured via header offsets <code>0x01C0–0x01DF</code>.</li>
+        </ul>
+    </section>
+</body>
+</html>

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Xbox 360 Optical Disc Layout (XGD2 / XGD3 / XDVDFS) — Xbox 360 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#xbox360" target="_top">Xbox 360</a><span>/</span><span>XGD2 / XGD3 Optical Disc</span></nav>
+
+    <h1>Xbox 360 Optical Disc Layout (XGD2 / XGD3 &amp; XDVDFS)</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">Optical Disc &amp; Filesystem · Xbox 360 Media</p>
+        <p>Dual-layer DVD-9 optical disc layout used by retail Xbox 360 software, combining an outer Video/SystemUpdate compatibility partition, an XDVDFS game partition anchored by a sector-32 Volume Descriptor, and physical/cryptographic security sectors (PFI, DMI, SS).</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.iso</code> (full Redump XGD2/XGD3 or trimmed XISO), <code>PFI.bin</code>, <code>DMI.bin</code>, <code>SS.bin</code></dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>"MICROSOFT*XBOX*MEDIA"</code> (20 bytes, <code>0x4D4943524F534F46542A58424F582A4D45444941</code>) at <code>GameBase + 0x10000</code></dd>
+            <dt>Endianness</dt>
+            <dd>Hybrid: Little-Endian XDVDFS volume descriptors &amp; directory BST; Big-Endian DVD PFI/security fields</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Microsoft Xbox 360 Optical Disc Drive (ODD) &amp; Kernel XDVDFS driver</dd>
+            <dt>Role/MIME</dt>
+            <dd>Optical disc container &amp; read-only binary-tree filesystem (<code>application/x-xbox360-iso</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification" class="section">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Xbox 360 optical media uses two dual-layer disc formats—<strong>XGD2</strong> (2005–2011) and <strong>XGD3</strong> (2011 onward)—built on 2048-byte (<code>0x800</code>) logical sectors. A full raw/Redump disc image contains an outer DVD-Video/SystemUpdate region (visible to standard DVD players as a compatibility video partition) followed by random-looking security padding and the Xbox 360 <strong>XDVDFS</strong> (Xbox DVD File System) game partition.</p>
+        <p><strong>Hybrid Endianness:</strong> All XDVDFS Volume Descriptor integers (<code>RootDirSector</code>, <code>RootDirSize</code>, <code>CreationTimestamp</code>) and Directory Entry offsets/sizes (<code>LeftSubtreeOffset</code>, <code>RightSubtreeOffset</code>, <code>StartSector</code>, <code>FileSize</code>) are <strong>Little-Endian</strong>, matching the x86 heritage of the original XDVDFS specification. By contrast, DVD Physical Format Information (<code>PFI</code>) and drive-level security sector fields follow ECMA-267 / MMC <strong>Big-Endian</strong> conventions.</p>
+    </section>
+
+    <section id="layout" class="section">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>XGD2 vs. XGD3 vs. Trimmed XISO Partition Offsets (2048-byte Sectors)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00000000</code></td><td>var</td><td><code>Video + Pad</code></td><td><code>XGD2 Outer Region</code></td><td>Starts with UDF/ISO-9660 DVD-Video compatibility partition and <code>$SystemUpdate</code> (later waves); spans up to <code>0x0FD8FFFF</code>.</td></tr>
+                    <tr><td><code>0x0FD90000</code></td><td>~7.05 GiB</td><td><code>XDVDFS</code></td><td><code>XGD2 Game Partition</code></td><td>Sector <code>129,824</code> (<code>0x1FB20</code>). Volume Descriptor at <code>0x0FDA0000</code> (<code>+0x10000</code>). Full Redump ISO typically <code>7,838,695,424</code> bytes.</td></tr>
+                    <tr><td><code>0x00000000</code></td><td>~32.5 MiB</td><td><code>Video + Pad</code></td><td><code>XGD3 Outer Region</code></td><td>Compact Video/SystemUpdate region preceding expanded XGD3 game area; spans up to <code>0x0207FFFF</code>.</td></tr>
+                    <tr><td><code>0x02080000</code></td><td>~7.93 GiB</td><td><code>XDVDFS</code></td><td><code>XGD3 Game Partition</code></td><td>Sector <code>16,640</code> (<code>0x4100</code>). Volume Descriptor at <code>0x02090000</code> (<code>+0x10000</code>). Full Redump ISO typically <code>8,738,846,720</code> bytes.</td></tr>
+                    <tr><td><code>0x00000000</code></td><td>var</td><td><code>XDVDFS</code></td><td><code>Trimmed XISO Partition</code></td><td>Stripped/rebuilt XISO images place the Game Partition directly at offset <code>0x00000000</code> (Volume Descriptor at <code>0x10000</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>XDVDFS Volume Descriptor (0x800 bytes at GamePartitionBase + 0x10000, Little-Endian)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x000</code></td><td>20</td><td><code>char[20]</code></td><td><code>MagicHead</code></td><td><code>"MICROSOFT*XBOX*MEDIA"</code>.</td></tr>
+                    <tr><td><code>0x014</code></td><td>4</td><td><code>u32le</code></td><td><code>RootDirSector</code></td><td>Starting 2048-byte sector of the root directory table (relative to <code>GamePartitionBase</code>).</td></tr>
+                    <tr><td><code>0x018</code></td><td>4</td><td><code>u32le</code></td><td><code>RootDirSize</code></td><td>Byte length of the root directory BST table.</td></tr>
+                    <tr><td><code>0x01C</code></td><td>8</td><td><code>u64le</code></td><td><code>CreationTimestamp</code></td><td>Windows FILETIME (100-ns intervals since 1601-01-01 UTC).</td></tr>
+                    <tr><td><code>0x024</code></td><td>1992</td><td><code>u8[0x7C8]</code></td><td><code>Reserved</code></td><td>Zero-filled padding up to <code>0x7EC</code>.</td></tr>
+                    <tr><td><code>0x7EC</code></td><td>20</td><td><code>char[20]</code></td><td><code>MagicTail</code></td><td>Closing <code>"MICROSOFT*XBOX*MEDIA"</code> signature.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>XDVDFS Directory Entry Node (variable size, 4-byte aligned, Little-Endian)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>0x00</code></td><td>2</td><td><code>u16le</code></td><td><code>LeftSubtreeOffset</code></td><td>Offset in <strong>4-byte dwords</strong> from start of this directory table to left BST child (<code>0</code> = none).</td></tr>
+                    <tr><td><code>0x02</code></td><td>2</td><td><code>u16le</code></td><td><code>RightSubtreeOffset</code></td><td>Offset in <strong>4-byte dwords</strong> from start of this directory table to right BST child (<code>0</code> = none).</td></tr>
+                    <tr><td><code>0x04</code></td><td>4</td><td><code>u32le</code></td><td><code>StartSector</code></td><td>Starting sector relative to <code>GamePartitionBase</code>.</td></tr>
+                    <tr><td><code>0x08</code></td><td>4</td><td><code>u32le</code></td><td><code>FileSize</code></td><td>File length in bytes (for directories, byte size of child directory table).</td></tr>
+                    <tr><td><code>0x0C</code></td><td>1</td><td><code>u8</code></td><td><code>Attributes</code></td><td>DOS/XDVDFS attribute bitmask (<code>0x10</code> = Directory).</td></tr>
+                    <tr><td><code>0x0D</code></td><td>1</td><td><code>u8</code></td><td><code>FilenameLength</code></td><td>Length of filename in bytes (<code>1..255</code>).</td></tr>
+                    <tr><td><code>0x0E</code></td><td><code>N</code></td><td><code>char[N]</code></td><td><code>Filename</code></td><td>Un-terminated ASCII / Windows-1252 filename.</td></tr>
+                    <tr><td><code>0x0E+N</code></td><td><code>0..3</code></td><td><code>u8[]</code></td><td><code>AlignmentPadding</code></td><td><code>0xFF</code> (or <code>0x00</code>) bytes aligning next node to a 4-byte boundary.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Out-of-Band Optical Security Sectors (2048 bytes each: PFI, DMI, SS)</caption>
+                <thead>
+                    <tr><th>Offset</th><th>Size</th><th>Type</th><th>Field</th><th>Description</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>PFI 0x000..0x7FF</code></td><td>2048</td><td><code>bytes</code></td><td><code>PhysicalFormatInfo</code></td><td>Lead-in layer descriptor (book type, disc size, data zone start/end PSN in BE) verified by drive firmware.</td></tr>
+                    <tr><td><code>DMI 0x000..0x03F</code></td><td>64</td><td><code>bytes</code></td><td><code>DmiHeader</code></td><td>Disc manufacturing metadata header &amp; authoring/timestamp records.</td></tr>
+                    <tr><td><code>DMI 0x040</code></td><td>16</td><td><code>u8[16]</code></td><td><code>Dmi.MediaID</code></td><td>16-byte disc MediaID cross-checked against <a href="../../index.html#xbox360-xex" target="_top">XEX2</a> Security Info <code>MediaID</code>.</td></tr>
+                    <tr><td><code>SS 0x000..0x7FF</code></td><td>2048</td><td><code>bytes</code></td><td><code>SecuritySector (SSv1/SSv2)</code></td><td>Challenge-response table (drive angle/timing challenges, 256-byte RSA-2048 Microsoft signature over disc geometry &amp; MediaID; SSv2 adds AP2.5/XGD3 challenges).</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags" class="section">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>Partition Detection &amp; File Offset Formulas</h3>
+        <pre><code># Probe candidate partition bases (sector 32 = +0x10000)
+CandidateBases = [ 0x00000000, 0x0FD90000, 0x02080000 ]
+VolumeDescriptorOffset = GamePartitionBase + (32 * 0x800)   # GamePartitionBase + 0x10000
+FileByteOffset(sector) = GamePartitionBase + (sector * 0x800)</code></pre>
+
+        <h3>Directory BST Offsets &amp; Attributes</h3>
+        <ul>
+            <li><strong>Child Node Byte Offset:</strong> Inside a directory's byte buffer, child offsets are scaled by <code>4</code>: <code>leftByteOffset = LeftSubtreeOffset * 4</code>, <code>rightByteOffset = RightSubtreeOffset * 4</code>.</li>
+            <li><strong>BST Ordering:</strong> Entries are ordered lexicographically using case-insensitive ASCII comparison (<code>tolower</code>) so the kernel can locate files (such as <code>default.xex</code>) in <code>O(log N)</code> time without reading the entire directory sequentially.</li>
+            <li><strong>Attributes Bitmask:</strong> <code>0x01</code> = Read-Only, <code>0x02</code> = Hidden, <code>0x04</code> = System, <code>0x10</code> = Directory, <code>0x20</code> = Archive, <code>0x80</code> = Normal.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases" class="section">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>Sector-Boundary <code>0xFF</code> Padding in Directory Tables:</strong> An XDVDFS directory node is <em>never</em> allowed to span across a 2048-byte (<code>0x800</code>) sector boundary. When the remaining bytes in a sector cannot fit the next node, the remainder of that sector is filled with <code>0xFF</code>. Note that any BST traversal reading <code>LeftSubtreeOffset * 4</code> or <code>RightSubtreeOffset * 4</code> jumps directly past padding, whereas linear directory scanners must skip <code>0xFF</code> padding (where <code>Left == 0xFFFF</code>) to the next <code>0x800</code> boundary.</li>
+            <li><strong>Redump Full ISO vs. Partition-Only XISO:</strong> Full Redump dumps preserve the outer Video/SystemUpdate partitions, putting the XDVDFS game partition at <code>0x0FD90000</code> (XGD2) or <code>0x02080000</code> (XGD3). Trimmed XISO dumps shift the game partition to <code>0x00000000</code>. Probing all three offsets against <code>"MICROSOFT*XBOX*MEDIA"</code> handles all variants uniformly (whereas Original Xbox XGD1 uses <code>0x18300000</code>).</li>
+            <li><strong>Zero-Length Files &amp; Empty Directories:</strong> An empty directory has <code>FileSize == 0</code>; do not attempt to parse nodes when <code>FileSize == 0</code>. Empty files have <code>FileSize == 0</code> and may carry <code>StartSector == 0</code>.</li>
+            <li><strong>XGD3 Content Integrity Verification (CIV) &amp; AP2.5:</strong> XGD3 discs store extra cryptographic challenge sectors and runtime CIV checks queried by the kernel through the optical drive; these live outside XDVDFS file payloads and are absent from trimmed XISO images.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode" class="section">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>function MountXdvdfs(isoStream):
+    MAGIC = "MICROSOFT*XBOX*MEDIA"
+    gameBase = null
+    for base in [0x00000000, 0x0FD90000, 0x02080000]:
+        if base + 0x10800 &lt;= isoStream.Length:
+            head = isoStream.ReadBytes(base + 0x10000, 20)
+            tail = isoStream.ReadBytes(base + 0x107EC, 20)
+            if head == MAGIC and tail == MAGIC:
+                gameBase = base
+                break
+    assert gameBase != null
+
+    vdOff = gameBase + 0x10000
+    rootSector = isoStream.ReadU32LE(vdOff + 0x14)
+    rootSize   = isoStream.ReadU32LE(vdOff + 0x18)
+
+    function ReadDirectory(dirSector, dirSize, parentPath):
+        if dirSize == 0:
+            return []
+        buf = isoStream.ReadBytes(gameBase + dirSector * 0x800, dirSize)
+        results = []
+        visited = set()
+        stack = [0]
+
+        while len(stack) &gt; 0:
+            off = stack.pop()
+            if off in visited or off + 14 &gt; len(buf):
+                continue
+            visited.add(off)
+
+            leftDword  = ReadU16LE(buf, off + 0x00)
+            rightDword = ReadU16LE(buf, off + 0x02)
+            if leftDword == 0xFFFF and rightDword == 0xFFFF:
+                continue
+
+            startSec = ReadU32LE(buf, off + 0x04)
+            fileSize = ReadU32LE(buf, off + 0x08)
+            attrs    = buf[off + 0x0C]
+            nameLen  = buf[off + 0x0D]
+            name     = DecodeAscii(buf[off + 0x0E : off + 0x0E + nameLen])
+            fullPath = parentPath + "/" + name
+
+            if (attrs &amp; 0x10) != 0:
+                results.extend(ReadDirectory(startSec, fileSize, fullPath))
+            else:
+                results.append({
+                    Path: fullPath,
+                    FileOffset: gameBase + startSec * 0x800,
+                    Size: fileSize,
+                    Attributes: attrs
+                })
+
+            if leftDword != 0:
+                stack.append(leftDword * 4)
+            if rightDword != 0:
+                stack.append(rightDword * 4)
+
+        return results
+
+    return ReadDirectory(rootSector, rootSize, "")</code></pre>
+    </section>
+
+    <section id="provenance" class="section">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn">
+            <p><strong>Security Sector &amp; Drive Challenge Caveat:</strong> <code>SS.bin</code> signatures, PFI/DMI drive-layer checks, and XGD3 AP2.5/CIV challenge tables rely on Microsoft RSA-2048 keys and proprietary optical drive firmware challenge-response protocols. <strong>No Microsoft keys or drive secrets are embedded here.</strong> Standard XDVDFS partition extraction requires no cryptographic keys.</p>
+        </aside>
+        <ul>
+            <li><strong>High Confidence (Confirmed Layout):</strong> XGD2 (<code>0x0FD90000</code>), XGD3 (<code>0x02080000</code>), trimmed XISO (<code>0x00000000</code>), sector-32 Volume Descriptor layout, and XDVDFS BST node structure are verified across Redump preservation sets and Xbox 360 filesystem tools.</li>
+            <li><strong>Wave &amp; Security Variations:</strong> Exact byte layouts of the outer Video/<code>$SystemUpdate</code> partitions vary across XGD2 Waves 1–13 and XGD3 revisions, and SSv1 vs. SSv2 challenge tables differ in AP2.5 coverage, without affecting the Game Partition XDVDFS parser.</li>
+        </ul>
+    </section>
+</body>
+</html>

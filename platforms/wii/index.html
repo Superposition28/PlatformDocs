@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nintendo Wii — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <span>Nintendo Wii</span>
+    </nav>
+
+    <h1>Nintendo Wii (RVL) Platform Overview</h1>
+
+    <section class="format-summary" aria-label="Platform summary">
+        <p class="eyebrow">Platform Specification Index · Route <code>#wii</code></p>
+        <p>Platform-inherited optical media, encrypted title packaging, executable/relocatable binary formats, and System Menu banner containers for the Nintendo Wii (RVL) architecture.</p>
+        <dl>
+            <dt>Main CPU</dt>
+            <dd>IBM PowerPC &ldquo;Broadway&rdquo; (32-bit PowerPC 750CL derivative, 729 MHz, big-endian)</dd>
+            <dt>Security / I/O CPU</dt>
+            <dd>ARM926EJ-S &ldquo;Starlet&rdquo; (243 MHz, big-endian IOS runtime, hardware AES-128 &amp; SHA-1)</dd>
+            <dt>Primary Memory</dt>
+            <dd>MEM1 (24 MiB 1T-SRAM) + MEM2 (64 MiB GDDR3, shared with Starlet/IOS)</dd>
+            <dt>Media &amp; Title Model</dt>
+            <dd>Encrypted &amp; SHA-1 hashed RVL optical disc partitions; NAND 64-bit Title ID hierarchy and <code>.wad</code> packages</dd>
+            <dt>Documented Scope</dt>
+            <dd>Strictly platform-inherited Wii/IOS specifications; zero game-specific or engine-specific formats.</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#architecture">Hardware &amp; IOS Architecture</a></li>
+            <li><a href="#memory-map">MEM1 / MEM2 Address Map</a></li>
+            <li><a href="#title-model">Optical Disc &amp; NAND Title Model</a></li>
+            <li><a href="#format-index">Wii Format Specifications</a></li>
+        </ul>
+    </nav>
+
+    <section id="architecture">
+        <h2>1. Hardware &amp; IOS Architecture</h2>
+        <p>The Nintendo Wii (internal model prefix <code>RVL</code>) pairs a GameCube-compatible PowerPC processor with a dedicated ARM security and I/O subsystem inside the Hollywood package:</p>
+        <ul>
+            <li><strong>Broadway (PowerPC):</strong> Executes user titles, System Menu, and SDK libraries in big-endian 32-bit mode at 729 MHz. It has no direct access to NAND flash, SD cards, USB, Wi-Fi, or raw optical disc decryption keys under normal security policy; instead, it issues Inter-Process Communication (IPC) requests to Starlet via memory-mapped registers and shared MEM2 buffers.</li>
+            <li><strong>Starlet (ARM926EJ-S) &amp; IOS:</strong> Runs the <em>Input/Output System</em> (IOS) microkernel at 243 MHz. Each IOS slot (e.g., IOS9, IOS36, IOS58) is an independently versioned ARM binary stored on NAND. Starlet enforces cryptographic signature checks (RSA-2048/4096, ECDSA), drives hardware AES-128-CBC and SHA-1 engines, and exposes virtual device nodes such as <code>/dev/di</code> (Disc Interface), <code>/dev/fs</code> (NAND filesystem), and <code>/dev/es</code> (E-Ticket Services).</li>
+            <li><strong>AHBPROT Escalation:</strong> When a title's Title Metadata (TMD) sets access-rights bit 0 (<code>0x00000001</code>), IOS disables the AHB memory protection bridge before launching Broadway, granting the PowerPC direct access to Starlet-side hardware registers.</li>
+        </ul>
+    </section>
+
+    <section id="memory-map">
+        <h2>2. MEM1 / MEM2 Address Map</h2>
+        <div class="table-scroll" role="region" aria-label="Wii memory map" tabindex="0">
+            <table class="format-counts">
+                <caption>Wii Broadway Virtual &amp; Physical Memory Regions</caption>
+                <thead>
+                    <tr>
+                        <th>Virtual Cached</th>
+                        <th>Virtual Uncached</th>
+                        <th>Physical Range</th>
+                        <th>Size</th>
+                        <th>Region &amp; Platform Role</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x80000000–0x817FFFFF</code></td>
+                        <td><code>0xC0000000–0xC17FFFFF</code></td>
+                        <td><code>0x00000000–0x017FFFFF</code></td>
+                        <td>24 MiB</td>
+                        <td><strong>MEM1 (1T-SRAM):</strong> Low-memory OS/boot globals (<code>0x80000000–0x800031FF</code>), apploader staging, static <code>.dol</code> code/data, and primary heap.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x90000000–0x93FFFFFF</code></td>
+                        <td><code>0xD0000000–0xD3FFFFFF</code></td>
+                        <td><code>0x10000000–0x13FFFFFF</code></td>
+                        <td>64 MiB</td>
+                        <td><strong>MEM2 (GDDR3):</strong> Extended Broadway code/data/heap (starting around <code>0x90000800</code>) plus upper shared IPC buffer and Starlet/IOS private workspace (exact upper limit reported at <code>0x80003120</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>—</td>
+                        <td><code>0xCC000000–0xCD80FFFF</code></td>
+                        <td><code>0x0C000000–0x0D80FFFF</code></td>
+                        <td>24 MiB+</td>
+                        <td><strong>Hardware MMIO:</strong> Hollywood/Flipper video interface, DSP, IPC doorbell (<code>0x0D000000</code>), and Hollywood registers (gated by AHBPROT).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="title-model">
+        <h2>3. Optical Disc &amp; NAND Title Model</h2>
+        <p>All executable software on Wii is organized under a unified 64-bit <strong>Title ID</strong> model shared by optical discs, NAND channels, and IOS modules:</p>
+        <ul>
+            <li><strong>64-bit Title ID (<code>u64be</code>):</strong> Split into an upper 32-bit <em>Title Type</em> and a lower 32-bit <em>Unique ID</em> (typically 4 ASCII characters for retail discs/channels):
+                <ul>
+                    <li><code>0x00000001</code> — System titles (<code>0x0000000100000002</code> System Menu; <code>0x00000001000000xx</code> IOS slots; <code>0x0000000100000100</code> BC; <code>0x0000000100000101</code> MIOS).</li>
+                    <li><code>0x00010000</code> — Disc-based titles and saved data directories.</li>
+                    <li><code>0x00010001</code> — Downloadable / installed Channels.</li>
+                    <li><code>0x00010002</code> — System Channels pre-installed on NAND.</li>
+                    <li><code>0x00010004</code> — Disc-installed / disc-bound Channels.</li>
+                    <li><code>0x00010005</code> — Downloadable content (DLC) packages.</li>
+                    <li><code>0x00010008</code> — Hidden / EULA / system data channels.</li>
+                </ul>
+            </li>
+            <li><strong>Signed Authentication Trio:</strong> Both disc partitions and NAND/WAD titles rely on a <strong>Certificate Chain</strong> (Root CA &rarr; XS/CP signing certs), a <strong>Ticket</strong> (<code>.tik</code>, carrying the AES-128-CBC encrypted Title Key), and <strong>Title Metadata</strong> (<code>.tmd</code>, declaring the required IOS version, boot content index, and per-content SHA-1 digests).</li>
+            <li><strong>Boot Flow:</strong> For optical discs, the System Menu reads the unencrypted disc header and partition table at <code>0x40000</code>, loads the target partition's Ticket/TMD, spawns the requested IOS on Starlet, verifies the <code>0x8000</code>-byte AES/SHA-1 cluster tree, runs the partition apploader, maps the <code>.dol</code> into MEM1/MEM2, and jumps to its entry point. For NAND channels, ES/System Menu launches the TMD's <code>BootIndex</code> content (<code>.app</code>) directly as a <code>.dol</code> or NAND loader.</li>
+        </ul>
+    </section>
+
+    <section id="format-index">
+        <h2>4. Wii Format Specifications</h2>
+        <p>Select a platform format below to open its full clean-room specification inside the PlatformDocs shell:</p>
+        <ul class="overview-links">
+            <li><a href="../../index.html#wii-wii-disc" target="_top"><strong>Wii Optical Disc Layout</strong> (<code>#wii-wii-disc</code>)</a> — Unencrypted header, <code>0x40000</code> partition tables, Ticket/TMD/Certs, H0–H3 hash tree, and <code>0x8000</code>-byte AES-128-CBC clusters.</li>
+            <li><a href="../../index.html#wii-wad" target="_top"><strong>.wad Title / Channel Package</strong> (<code>#wii-wad</code>)</a> — <code>0x20</code>-byte WAD header, <code>Is</code>/<code>Ib</code>/<code>Bk</code> types, 64-byte aligned Cert/CRL/Ticket/TMD/Content/Footer layout, and AES content decryption.</li>
+            <li><a href="../../index.html#wii-dol-rel" target="_top"><strong>Wii .dol / .rel Executables &amp; Loader Model</strong> (<code>#wii-dol-rel</code>)</a> — Static <code>.dol</code> sections, <code>.rel</code> v3 relocations/imports, and generalized IOS/MEM1/MEM2 loader mapping.</li>
+            <li><a href="../../index.html#wii-opening-bnr" target="_top"><strong>opening.bnr Banner Container</strong> (<code>#wii-opening-bnr</code>)</a> — <code>IMET</code> header with MD5 integrity check, <code>U8</code> archive (<code>0x55AA382D</code>), and <code>IMD5</code>/<code>LZ77</code>-wrapped <code>icon.bin</code>, <code>banner.bin</code>, and <code>sound.bin</code>.</li>
+        </ul>
+    </section>
+</body>
+</html>

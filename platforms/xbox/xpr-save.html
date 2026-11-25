@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>XBX Metadata &amp; XPR0/XPR1 Containers — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#xbox" target="_top">Original Xbox</a><span>/</span><span>XBX Metadata &amp; XPR0/XPR1 Containers</span>
+    </nav>
+
+    <div class="doc-overview">
+        <h1>Xbox SDK Metadata (<code>.xbx</code>) &amp; Packed Resources (<code>XPR0</code> / <code>XPR1</code>)</h1>
+
+        <section class="format-summary">
+            <p class="eyebrow">Original Xbox &middot; Dashboard Save Metadata &amp; GPU Resource Bundles</p>
+            <p>
+                Platform-inherited metadata and GPU resource formats from the Original Xbox XDK: UTF-16LE
+                <code>TitleMeta.xbx</code> / <code>SaveMeta.xbx</code> key-value descriptors, XPR0-wrapped
+                <code>TitleImage.xbx</code> / <code>SaveImage.xbx</code> icons, and <code>XPR0</code> / <code>XPR1</code>
+                Direct3D 8 packed resource bundles.
+            </p>
+            <dl>
+                <dt>Canonical Filenames</dt>
+                <dd><code>TitleMeta.xbx</code>, <code>SaveMeta.xbx</code>, <code>TitleImage.xbx</code>, <code>SaveImage.xbx</code>, <code>*.xpr</code></dd>
+                <dt>Magic Bytes</dt>
+                <dd><code>FF FE</code> (UTF-16LE BOM for text <code>.xbx</code>); <code>58 50 52 30</code> (<code>XPR0</code>); <code>58 50 52 31</code> (<code>XPR1</code>)</dd>
+                <dt>Endianness</dt>
+                <dd>Little-endian</dd>
+                <dt>Platform / OS Scope</dt>
+                <dd>Original Xbox Dashboard (<code>TDATA</code> / <code>UDATA</code> / Memory Units) and XDK D3D8 runtime</dd>
+                <dt>Role / MIME</dt>
+                <dd>Dashboard display metadata, save thumbnails, and pre-packed GPU textures/buffers</dd>
+            </dl>
+        </section>
+
+        <nav class="page-toc" aria-label="On this page">
+            <ul>
+                <li><a href="#identification">1. Identification &amp; Scope</a></li>
+                <li><a href="#layout">2. Binary Layout Tables</a></li>
+                <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+                <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+                <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+                <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+            </ul>
+        </nav>
+
+        <section class="section" id="identification">
+            <h2>1. Identification &amp; Scope</h2>
+            <p>
+                The Original Xbox dashboard displays title and save-game entries stored under
+                <code>TDATA\&lt;TitleID&gt;\</code> and <code>UDATA\&lt;TitleID&gt;\</code> using two complementary
+                platform conventions:
+            </p>
+            <ul>
+                <li><strong>Text Metadata (<code>TitleMeta.xbx</code>, <code>SaveMeta.xbx</code>):</strong> Plain UTF-16LE text files beginning with the little-endian BOM (<code>FF FE</code>) and containing <code>Key=Value</code> pairs separated by CRLF.</li>
+                <li><strong>Packed GPU Resources (<code>XPR0</code>, <code>XPR1</code>, and <code>*Image.xbx</code>):</strong> Binary containers produced by XDK <code>Bundler</code> to map D3D8 resource headers (such as <code>D3DTexture</code>) directly into contiguous GPU-accessible memory. Dashboard icon files (<code>TitleImage.xbx</code>, <code>SaveImage.xbx</code>, and XBE <code>$$XTIMAGE</code> / <code>$$XSIMAGE</code> sections) are single-texture <code>XPR0</code> containers.</li>
+            </ul>
+        </section>
+
+        <section class="section" id="layout">
+            <h2>2. Binary Layout Tables</h2>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption><code>TitleMeta.xbx</code> &amp; <code>SaveMeta.xbx</code> UTF-16LE Key-Value Structure</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>2</td><td><code>u8[2]</code></td><td><code>BOM</code></td><td>UTF-16LE byte-order mark (<code>FF FE</code>; optional in some tools, standard in XDK).</td></tr>
+                        <tr><td><code>0x0002</code></td><td>Variable</td><td><code>utf16le</code></td><td><code>KeyValueLines</code></td><td>CRLF-delimited (<code>0D 00 0A 00</code>) lines formatted as <code>Key=Value</code> (<code>TitleName=...</code> in <code>TitleMeta.xbx</code>; <code>Name=...</code> in <code>SaveMeta.xbx</code>).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption><code>XPR0</code> Container Header (<code>0x0000</code> &ndash; <code>0x000B</code>, 12 bytes)</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>4</td><td><code>u8[4]</code></td><td><code>Magic</code></td><td>ASCII <code>XPR0</code> (<code>0x30525058</code> as <code>u32le</code>).</td></tr>
+                        <tr><td><code>0x0004</code></td><td>4</td><td><code>u32le</code></td><td><code>TotalSize</code></td><td>Total size of the <code>XPR0</code> file in bytes (header + data section).</td></tr>
+                        <tr><td><code>0x0008</code></td><td>4</td><td><code>u32le</code></td><td><code>HeaderSize</code></td><td>Byte size of the header block (typically padded to a <code>2048</code>-byte boundary); bulk GPU data starts here.</td></tr>
+                        <tr><td><code>0x000C</code></td><td>Variable</td><td><code>D3DResource[]</code></td><td><code>ResourceHeaders</code></td><td>Sequential packed D3D8 resource structs terminated by <code>u32le(0xFFFFFFFF)</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption><code>XPR0</code> Embedded <code>D3DTexture</code> Header (20 bytes, at <code>0x000C</code>+)</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>4</td><td><code>u32le</code></td><td><code>Common</code></td><td>D3D8 resource flags and type tag (<code>(Common &amp; 0x00070000) == 0x00040000</code> for Texture).</td></tr>
+                        <tr><td><code>0x0004</code></td><td>4</td><td><code>u32le</code></td><td><code>Data</code></td><td>Byte offset of pixel data relative to <code>HeaderSize</code> (patched to GPU pointer at runtime).</td></tr>
+                        <tr><td><code>0x0008</code></td><td>4</td><td><code>u32le</code></td><td><code>Lock</code></td><td>Runtime lock counter (<code>0</code> on disk).</td></tr>
+                        <tr><td><code>0x000C</code></td><td>4</td><td><code>u32le</code></td><td><code>Format</code></td><td>Packed NV2A texture format word (pixel format, dimensionality, mip count, log2 dimensions).</td></tr>
+                        <tr><td><code>0x0010</code></td><td>4</td><td><code>u32le</code></td><td><code>Size</code></td><td>Explicit width/height/pitch word for linear (non-swizzled) textures; <code>0</code> for power-of-two swizzled/DXT textures.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption><code>XPR1</code> Named Packed Resource Header (<code>0x0000</code> &ndash; <code>0x000F</code>, 16 bytes)</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>4</td><td><code>u8[4]</code></td><td><code>Magic</code></td><td>ASCII <code>XPR1</code> (<code>0x31525058</code> as <code>u32le</code>).</td></tr>
+                        <tr><td><code>0x0004</code></td><td>4</td><td><code>u32le</code></td><td><code>TotalSize</code></td><td>Total size of the <code>XPR1</code> file in bytes.</td></tr>
+                        <tr><td><code>0x0008</code></td><td>4</td><td><code>u32le</code></td><td><code>HeaderSize</code></td><td>Byte size of header + resource table + name strings prior to GPU data.</td></tr>
+                        <tr><td><code>0x000C</code></td><td>4</td><td><code>u32le</code></td><td><code>ResourceCount</code></td><td>Number of 8-byte <code>(NameOffset, ResourceOffset)</code> directory entries starting at <code>0x0010</code>.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section" id="flags">
+            <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption><code>D3DResource.Common</code> Resource Type Field (<code>(Common &gt;&gt; 16) &amp; 0x7</code>)</caption>
+                    <thead>
+                        <tr>
+                            <th>Type Value</th>
+                            <th>Masked Hex</th>
+                            <th>D3D8 Resource Type</th>
+                            <th>Header Size on Disk</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0</code></td><td><code>0x00000000</code></td><td><code>VertexBuffer</code></td><td>12 bytes (<code>Common</code>, <code>Data</code>, <code>Lock</code>)</td></tr>
+                        <tr><td><code>1</code></td><td><code>0x00010000</code></td><td><code>IndexBuffer</code></td><td>12 bytes</td></tr>
+                        <tr><td><code>2</code></td><td><code>0x00020000</code></td><td><code>PushBuffer</code></td><td>20 bytes (includes <code>Size</code>, <code>AllocationSize</code>)</td></tr>
+                        <tr><td><code>3</code></td><td><code>0x00030000</code></td><td><code>Palette</code></td><td>12 bytes</td></tr>
+                        <tr><td><code>4</code></td><td><code>0x00040000</code></td><td><code>Texture</code></td><td>20 bytes (<code>Common</code>, <code>Data</code>, <code>Lock</code>, <code>Format</code>, <code>Size</code>)</td></tr>
+                        <tr><td><code>5</code></td><td><code>0x00050000</code></td><td><code>Surface</code></td><td>20 bytes</td></tr>
+                        <tr><td><code>6</code></td><td><code>0x00060000</code></td><td><code>Fixup</code></td><td>Resource fixup entry</td></tr>
+                        <tr><td>&mdash;</td><td><code>0xFFFFFFFF</code></td><td>End-of-List Sentinel</td><td>Terminates <code>XPR0</code> header array</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3><code>D3DTexture.Format</code> Bitfield Decoding</h3>
+<pre><code>is_cubemap  = (Format &amp; 0x00000004) != 0
+dimensions  = (Format &gt;&gt; 4)  &amp; 0x0F    // 1 = 1D, 2 = 2D, 3 = 3D
+d3d_format  = (Format &gt;&gt; 8)  &amp; 0xFF    // e.g., 0x06 ARGB8888, 0x0C DXT1, 0x0E DXT3, 0x0F DXT5, 0x12 Linear ARGB
+mip_levels  = (Format &gt;&gt; 16) &amp; 0x0F
+width       = 1 &lt;&lt; ((Format &gt;&gt; 20) &amp; 0x0F)
+height      = 1 &lt;&lt; ((Format &gt;&gt; 24) &amp; 0x0F)
+depth       = 1 &lt;&lt; ((Format &gt;&gt; 28) &amp; 0x0F)
+
+// Linear texture fallback when Format width/height are 0 and Size != 0:
+// width  = (Size &amp; 0x00000FFF) + 1
+// height = ((Size &gt;&gt; 12) &amp; 0x00000FFF) + 1</code></pre>
+            <p>
+                Bulk pixel data for each resource starts at absolute file offset <code>HeaderSize + resource.Data</code>.
+                Non-linear Xbox textures use Morton (Z-order) swizzling for uncompressed pixel formats, whereas DXT1/3/5
+                compressed textures use standard 4&times;4 block compression without Morton pixel reordering inside blocks.
+            </p>
+        </section>
+
+        <section class="section" id="edge-cases">
+            <h2>4. Edge Cases &amp; Loader Rules</h2>
+            <ul>
+                <li><strong><code>.xbx</code> Dual Nature:</strong> Despite sharing the <code>.xbx</code> extension, <code>TitleMeta.xbx</code> and <code>SaveMeta.xbx</code> are UTF-16LE text files while <code>TitleImage.xbx</code> and <code>SaveImage.xbx</code> are binary <code>XPR0</code> containers. Parsers must dispatch by magic bytes (<code>XPR0</code> vs. <code>FF FE</code> UTF-16LE) rather than extension alone.</li>
+                <li><strong>Dashboard Icon Constraints:</strong> Standard Xbox dashboard thumbnails (<code>TitleImage.xbx</code> / <code>SaveImage.xbx</code>) are typically 64&times;64 or 128&times;128 DXT1 or ARGB textures inside a 2048-byte-header <code>XPR0</code> file; however, parsers should read dimensions dynamically from <code>D3DTexture.Format</code> / <code>Size</code>.</li>
+                <li><strong><code>XPR0</code> Sentinel Termination &amp; Padding:</strong> In <code>XPR0</code>, header structs end at the first <code>u32le == 0xFFFFFFFF</code> before <code>HeaderSize</code>. Remaining bytes between the sentinel and <code>HeaderSize</code> are zero padding used to align the GPU data section to 2048 bytes (<code>0x800</code>).</li>
+                <li><strong><code>XPR1</code> Name Table:</strong> <code>XPR1</code> adds a named lookup directory (<code>ResourceCount</code> entries of <code>{ NameOffset, ResourceOffset }</code>) ahead of the resource structs so titles can query bundled resources by ASCII name via <code>CXBPackedResource::GetResource(name)</code>.</li>
+            </ul>
+        </section>
+
+        <section class="section" id="pseudocode">
+            <h2>5. Step-by-Step Parser Pseudocode</h2>
+<pre><code>function parse_xbx_or_xpr(file):
+    magic4 = read_bytes(file, 0x0000, 4)
+
+    if magic4 == b"XPR0":
+        total_size  = read_u32le(file, 0x0004)
+        header_size = read_u32le(file, 0x0008)
+        assert header_size &lt;= total_size and total_size &lt;= size_of(file)
+
+        off = 0x000C
+        resources = []
+        while off + 4 &lt;= header_size:
+            common = read_u32le(file, off)
+            if common == 0xFFFFFFFF:
+                break
+            rtype = (common &gt;&gt; 16) &amp; 0x7
+            data_rel = read_u32le(file, off + 0x04)
+            abs_data = header_size + data_rel
+            if rtype == 4 or rtype == 5:  // Texture or Surface
+                fmt  = read_u32le(file, off + 0x0C)
+                sz   = read_u32le(file, off + 0x10)
+                resources.append({ type: rtype, data_offset: abs_data, format: fmt, size_word: sz })
+                off += 20
+            else if rtype == 2:  // PushBuffer
+                sz    = read_u32le(file, off + 0x0C)
+                alloc = read_u32le(file, off + 0x10)
+                resources.append({ type: rtype, data_offset: abs_data, size: sz, allocation_size: alloc })
+                off += 20
+            else:  // VertexBuffer (0), IndexBuffer (1), Palette (3), Fixup (6)
+                resources.append({ type: rtype, data_offset: abs_data })
+                off += 12
+        return { kind: "XPR0", resources }
+
+    if magic4 == b"XPR1":
+        total_size     = read_u32le(file, 0x0004)
+        header_size    = read_u32le(file, 0x0008)
+        resource_count = read_u32le(file, 0x000C)
+        return { kind: "XPR1", total_size, header_size, resource_count }
+
+    if magic4[0..2] == b"\xFF\xFE":
+        text = decode_utf16le(read_bytes(file, 2, size_of(file) - 2))
+        kv = {}
+        for line in split_lines(text):
+            if "=" in line:
+                k, v = split_once(line, "=")
+                kv[trim(k)] = trim(v)
+        return { kind: "XBX_META", entries: kv }</code></pre>
+        </section>
+
+        <section class="section" id="provenance">
+            <h2>6. Provenance &amp; Confidence</h2>
+            <p>
+                <strong>High Confidence:</strong> <code>TitleMeta.xbx</code> / <code>SaveMeta.xbx</code> UTF-16LE encoding,
+                the 12-byte <code>XPR0</code> header, the 20-byte <code>D3DTexture</code> layout,
+                <code>D3DCOMMON_TYPE_*</code> masks, and <code>D3DTexture.Format</code> bitfield shifts are confirmed
+                from Original Xbox XDK D3D8 headers and dashboard save artifacts.
+            </p>
+            <aside class="callout-warn">
+                <strong>XPR1 Offset-Base &amp; Save Signing Caveat:</strong> While the 16-byte <code>XPR1</code> header
+                and <code>(NameOffset, ResourceOffset)</code> directory structure are standard across later XDK
+                <code>Bundler</code> builds, exact offset-base conventions inside <code>XPR1</code> directory entries
+                should be cross-checked against the target XDK build&rsquo;s <code>xpr.h</code> / <code>XBResource</code>
+                loader. Note also that Xbox save files on HDD/MU may carry separate HMAC-SHA1 signatures computed with
+                the title&rsquo;s XBE <code>SignatureKey</code> outside the <code>.xbx</code> metadata files themselves.
+            </aside>
+        </section>
+    </div>
+</body>
+</html>

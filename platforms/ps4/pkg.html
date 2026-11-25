@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PS4 .pkg — CNT Package Container &amp; PFS Filesystem — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps4" target="_top">PlayStation 4</a><span>/</span><span>PS4 .pkg (CNT &amp; PFS)</span>
+    </nav>
+
+    <h1>PS4 .pkg — CNT Package Container &amp; PFS Filesystem</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">PLAYSTATION 4 · DIGITAL DISTRIBUTION &amp; EMBEDDED FILESYSTEM</p>
+        <p>PlayStation 4 distribution archive combining a big-endian <strong>CNT</strong> (Content) outer container (<code>\x7FCNT</code>) for signed/encrypted metadata entries and a little-endian embedded <strong>PFS</strong> (PlayStation File System) image housing the application's <code>eboot.bin</code>, <code>sce_sys/</code>, and content directories.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.pkg</code> (PS4 App, Patch, DLC, and License packages)</dd>
+            <dt>Magic Bytes</dt>
+            <dd>CNT Header: <code>7F 43 4E 54</code> (<code>\x7FCNT</code>, <code>u32be 0x7F434E54</code>); PFS Superblock: <code>u64le 20130315</code> (<code>0x01332A0B</code>) at <code>+0x08</code></dd>
+            <dt>Endianness</dt>
+            <dd><strong>Hybrid:</strong> CNT header and 32-byte entry table are <strong>big-endian</strong>; embedded PFS superblock, inodes, and dirents are <strong>little-endian</strong></dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 4 (Orbis OS package installer &amp; kernel PFS mount driver)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Signed distribution container and mountable block filesystem image (<code>application/x-orbis-pkg</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section class="section" id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>PS4 <code>.pkg</code> files are identified at offset <code>0x0000</code> by the 4-byte magic <code>7F 43 4E 54</code> (<code>\x7FCNT</code>), distinguishing them from PS3 <code>\x7FPKG</code> (<code>0x7F504B47</code>) packages. Internally, a PS4 <code>.pkg</code> is split into two nested structural domains with opposite byte orders:</p>
+        <ul>
+            <li><strong>Outer CNT Container (Big-Endian):</strong> Holds the <code>0x1000</code>-byte CNT header (including SHA-256 digests, PFS geometry at <code>0x400</code>, and RSA-2048 header signature), followed by the CNT Entry Table (<code>pkg_entry_count</code> &times; 32-byte big-endian records) and entry payloads (<code>param.sfo</code>, <code>icon0.png</code>, <code>playgo-chunk.dat</code>, license files, key tables, and digests).</li>
+            <li><strong>Inner PFS Image (Little-Endian):</strong> Located at <code>pfs_image_offset</code> (declared at CNT header <code>0x408</code>). The PFS image begins with a little-endian Superblock (<code>version = 1</code>, <code>magic = 20130315</code> / <code>0x01332A0B</code>), followed by dynamic inodes (<code>dinode</code>) and a hierarchical directory tree rooted at <code>uroot</code> containing <code>sce_sys/</code> and application files.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Hybrid Endianness Rule:</strong> CNT header and entry table integers MUST be decoded as <strong>big-endian</strong> (<code>u16be</code> / <code>u32be</code> / <code>u64be</code>). Once seeking to <code>pfs_image_offset</code>, all PFS superblock fields, inode pointers, and directory records MUST be decoded as <strong>little-endian</strong> (<code>u16le</code> / <code>u32le</code> / <code>u64le</code>).</p>
+        </aside>
+    </section>
+
+    <section class="section" id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PS4 CNT (.pkg) Header — Core Fields &amp; Digests (Big-Endian, 0x000..0xFFF)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x000</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_magic</td>
+                        <td>Constant <code>0x7F434E54</code> (<code>\x7FCNT</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x004</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_type</td>
+                        <td>Package type / flags (e.g., <code>0x00000001</code> Retail, <code>0x80000001</code> Fake/Debug flag bit 31).</td>
+                    </tr>
+                    <tr>
+                        <td>0x008</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_0x008</td>
+                        <td>Reserved / unknown field (typically <code>0x00000000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x00C</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_file_count</td>
+                        <td>Total packaged item/file count metadata.</td>
+                    </tr>
+                    <tr>
+                        <td>0x010</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_entry_count</td>
+                        <td>Number of 32-byte records in the CNT Entry Table.</td>
+                    </tr>
+                    <tr>
+                        <td>0x014</td>
+                        <td>2</td>
+                        <td>u16be</td>
+                        <td>pkg_sc_entry_count</td>
+                        <td>Number of system/SC entries in the Entry Table.</td>
+                    </tr>
+                    <tr>
+                        <td>0x016</td>
+                        <td>2</td>
+                        <td>u16be</td>
+                        <td>pkg_entry_count_2</td>
+                        <td>Secondary entry count (commonly mirrors <code>pkg_entry_count</code> low 16 bits).</td>
+                    </tr>
+                    <tr>
+                        <td>0x018</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_table_offset</td>
+                        <td>File offset to the CNT Entry Table (commonly <code>0x2000</code> or <code>0x1800</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x01C</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_entry_data_size</td>
+                        <td>Combined byte size of the Entry Table and its entry data area.</td>
+                    </tr>
+                    <tr>
+                        <td>0x020</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>pkg_body_offset</td>
+                        <td>Byte offset to the PKG body section.</td>
+                    </tr>
+                    <tr>
+                        <td>0x028</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>pkg_body_size</td>
+                        <td>Byte size of the PKG body section.</td>
+                    </tr>
+                    <tr>
+                        <td>0x030</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>pkg_content_offset</td>
+                        <td>Byte offset to the primary content region.</td>
+                    </tr>
+                    <tr>
+                        <td>0x038</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>pkg_content_size</td>
+                        <td>Byte size of the primary content region.</td>
+                    </tr>
+                    <tr>
+                        <td>0x040</td>
+                        <td>36</td>
+                        <td>char[36]</td>
+                        <td>pkg_content_id</td>
+                        <td>ASCII Content ID (<code>XXYYYY-CUSA00000_00-0000000000000000</code>), followed by 12 zero bytes (<code>0x064..0x06F</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x070</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_drm_type</td>
+                        <td>DRM mode (<code>0x0</code> None, <code>0xF</code> PS4 DRM).</td>
+                    </tr>
+                    <tr>
+                        <td>0x074</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_content_type</td>
+                        <td>Content type enum (<code>0x1A</code> GD, <code>0x1B</code> AC/DLC, <code>0x1C</code> AL/License, <code>0x1E</code> Delta Patch).</td>
+                    </tr>
+                    <tr>
+                        <td>0x078</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_content_flags</td>
+                        <td>32-bit package capability and patch flags.</td>
+                    </tr>
+                    <tr>
+                        <td>0x07C</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_promote_size</td>
+                        <td>Promote metadata size.</td>
+                    </tr>
+                    <tr>
+                        <td>0x080</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_version_date</td>
+                        <td>Packed BCD build date (e.g., <code>0x20150101</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x084</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_version_hash</td>
+                        <td>Build version hash.</td>
+                    </tr>
+                    <tr>
+                        <td>0x098</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_iro_tag</td>
+                        <td>IRO tag / internal role marker.</td>
+                    </tr>
+                    <tr>
+                        <td>0x09C</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pkg_ekc_version</td>
+                        <td>EKC key revision version.</td>
+                    </tr>
+                    <tr>
+                        <td>0x100</td>
+                        <td>128</td>
+                        <td>u8[32] &times; 4</td>
+                        <td>digests_main</td>
+                        <td>Four 32-byte SHA-256 digests: <code>digest_entries1</code> (<code>0x100</code>), <code>digest_entries2</code> (<code>0x120</code>), <code>digest_table_digest</code> (<code>0x140</code>), <code>digest_body_digest</code> (<code>0x160</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x404</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pfs_flags</td>
+                        <td>PFS header flags inside CNT.</td>
+                    </tr>
+                    <tr>
+                        <td>0x408</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>pfs_image_offset</td>
+                        <td>Byte offset to the embedded little-endian PFS image inside the <code>.pkg</code>.</td>
+                    </tr>
+                    <tr>
+                        <td>0x410</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>pfs_image_size</td>
+                        <td>Byte size of the embedded PFS image.</td>
+                    </tr>
+                    <tr>
+                        <td>0x418</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>mount_image_offset</td>
+                        <td>Offset of the mount image / outer PFS view.</td>
+                    </tr>
+                    <tr>
+                        <td>0x420</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>mount_image_size</td>
+                        <td>Size of the mount image / outer PFS view.</td>
+                    </tr>
+                    <tr>
+                        <td>0x428</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>pkg_size</td>
+                        <td>Total <code>.pkg</code> file size in bytes.</td>
+                    </tr>
+                    <tr>
+                        <td>0x430</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pfs_signed_size</td>
+                        <td>Byte length of the PFS signed region.</td>
+                    </tr>
+                    <tr>
+                        <td>0x434</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>pfs_cache_size</td>
+                        <td>PFS cache size metadata.</td>
+                    </tr>
+                    <tr>
+                        <td>0x438</td>
+                        <td>32</td>
+                        <td>u8[32]</td>
+                        <td>pfs_image_digest</td>
+                        <td>SHA-256 digest of the PFS image.</td>
+                    </tr>
+                    <tr>
+                        <td>0x458</td>
+                        <td>32</td>
+                        <td>u8[32]</td>
+                        <td>pfs_signed_digest</td>
+                        <td>SHA-256 digest of the PFS signed region.</td>
+                    </tr>
+                    <tr>
+                        <td>0xFE0</td>
+                        <td>32</td>
+                        <td>u8[32]</td>
+                        <td>pkg_digest</td>
+                        <td>Header SHA-256 digest (within the <code>0xF00..0xFFF</code> RSA-2048 signature/footer block).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>CNT Entry Table Record (32 bytes / 0x20 each, Big-Endian, at pkg_table_offset)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>id</td>
+                        <td>Standardized entry ID (e.g., <code>0x0010</code> Entry Keys, <code>0x0100</code> Metas, <code>0x0200</code> Entry Names, <code>0x1000</code> <code>param.sfo</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x04</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>filename_offset</td>
+                        <td>Byte offset into the Entry Names table (ID <code>0x0200</code>), or <code>0</code> if unnamed.</td>
+                    </tr>
+                    <tr>
+                        <td>0x08</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>flags1</td>
+                        <td>Primary entry flags (bit 31 = encrypted; bits 12..15 = key index).</td>
+                    </tr>
+                    <tr>
+                        <td>0x0C</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>flags2</td>
+                        <td>Secondary flags / key index or entry attribute bits.</td>
+                    </tr>
+                    <tr>
+                        <td>0x10</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>offset</td>
+                        <td>Byte offset from start of <code>.pkg</code> to this entry's payload.</td>
+                    </tr>
+                    <tr>
+                        <td>0x14</td>
+                        <td>4</td>
+                        <td>u32be</td>
+                        <td>size</td>
+                        <td>Unpadded logical size of entry payload in bytes.</td>
+                    </tr>
+                    <tr>
+                        <td>0x18</td>
+                        <td>8</td>
+                        <td>u64be</td>
+                        <td>padding</td>
+                        <td>8 bytes zero padding.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Embedded PFS Superblock (Little-Endian, at pfs_image_offset + 0x00)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>version</td>
+                        <td>PFS version (<code>1</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x08</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>magic</td>
+                        <td>PFS magic number: <code>20130315</code> decimal (<code>0x0000000001332A0B</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x10</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>id</td>
+                        <td>Filesystem ID (commonly <code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x18</td>
+                        <td>1</td>
+                        <td>u8</td>
+                        <td>fmode</td>
+                        <td>Filesystem mode byte.</td>
+                    </tr>
+                    <tr>
+                        <td>0x19</td>
+                        <td>1</td>
+                        <td>u8</td>
+                        <td>clean</td>
+                        <td>Clean flag.</td>
+                    </tr>
+                    <tr>
+                        <td>0x1A</td>
+                        <td>1</td>
+                        <td>u8</td>
+                        <td>ronly</td>
+                        <td>Read-only flag (<code>1</code> on packaged PFS).</td>
+                    </tr>
+                    <tr>
+                        <td>0x1B</td>
+                        <td>1</td>
+                        <td>u8</td>
+                        <td>rsv</td>
+                        <td>Reserved byte.</td>
+                    </tr>
+                    <tr>
+                        <td>0x1C</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>mode</td>
+                        <td>PFS mode flags (signed, is_disc, encrypted, block-mode).</td>
+                    </tr>
+                    <tr>
+                        <td>0x1E</td>
+                        <td>2</td>
+                        <td>u16le</td>
+                        <td>unk1</td>
+                        <td>Reserved/unknown 16-bit field.</td>
+                    </tr>
+                    <tr>
+                        <td>0x20</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>blocks_size</td>
+                        <td>PFS block size in bytes (typically <code>0x10000</code> = 64 KiB, or <code>0x8000</code> = 32 KiB).</td>
+                    </tr>
+                    <tr>
+                        <td>0x24</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>nbackup</td>
+                        <td>Number of superblock backups.</td>
+                    </tr>
+                    <tr>
+                        <td>0x28</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>nblock</td>
+                        <td>Total block count in the PFS image.</td>
+                    </tr>
+                    <tr>
+                        <td>0x30</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>ndinode</td>
+                        <td>Total number of dynamic inodes (<code>dinode</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x38</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>ndblock</td>
+                        <td>Number of data blocks.</td>
+                    </tr>
+                    <tr>
+                        <td>0x40</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>ndinodeblock</td>
+                        <td>Number of blocks storing the <code>dinode</code> table (starting after the superblock blocks).</td>
+                    </tr>
+                    <tr>
+                        <td>0x48</td>
+                        <td>8</td>
+                        <td>u64le</td>
+                        <td>superroot_ino</td>
+                        <td>Inode index of the <code>uroot</code> super-root directory (typically <code>0</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PFS Directory Entry (dirent, Little-Endian, inside directory inode data blocks)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0x00</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>ino</td>
+                        <td>Target inode index (<code>0</code> marks end of active entries in a block).</td>
+                    </tr>
+                    <tr>
+                        <td>0x04</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>type</td>
+                        <td>Entry type: <code>2</code> Regular File, <code>3</code> Directory, <code>4</code> <code>.</code> (self), <code>5</code> <code>..</code> (parent).</td>
+                    </tr>
+                    <tr>
+                        <td>0x08</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>namelen</td>
+                        <td>Filename byte length (excluding padding).</td>
+                    </tr>
+                    <tr>
+                        <td>0x0C</td>
+                        <td>4</td>
+                        <td>u32le</td>
+                        <td>entsize</td>
+                        <td>Total record stride in bytes (8-byte aligned; last entry in a block extends to the end of <code>blocks_size</code>).</td>
+                    </tr>
+                    <tr>
+                        <td>0x10</td>
+                        <td>namelen</td>
+                        <td>char[namelen]</td>
+                        <td>name</td>
+                        <td>UTF-8/ASCII filename characters.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Standard CNT Entry IDs (u32be id)</caption>
+                <thead>
+                    <tr>
+                        <th>Entry ID</th>
+                        <th>Role</th>
+                        <th>Canonical Path / Payload</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0001</code></td>
+                        <td>PKG Table</td>
+                        <td><code>.digests</code> — SHA-256 digests of PKG entries</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0010</code></td>
+                        <td>PKG Keys</td>
+                        <td><code>.entry_keys</code> — RSA-encrypted per-index AES entry keys</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0020</code></td>
+                        <td>PFS Key</td>
+                        <td><code>.image_key</code> — Encrypted EKpfs / PFS encryption key</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0080</code></td>
+                        <td>PKG Digests</td>
+                        <td><code>.general_digests</code> — General package verification hashes</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0100</code></td>
+                        <td>Metadata</td>
+                        <td><code>.metas</code> — Entry metadata array (32-byte records describing encrypted entries)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0200</code></td>
+                        <td>Strings</td>
+                        <td><code>.entry_names</code> — NUL-terminated filenames indexed by <code>filename_offset</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0400</code> .. <code>0x0409</code></td>
+                        <td>System / DRM</td>
+                        <td><code>license.dat</code> (<code>0x0400</code>), <code>license.info</code> (<code>0x0401</code>), <code>nptitle.dat</code> (<code>0x0402</code>), <code>npbind.dat</code> (<code>0x0403</code>), <code>selfinfo.dat</code> (<code>0x0404</code>), <code>imageinfo.dat</code> (<code>0x0406</code>), <code>target-deltainfo.dat</code> (<code>0x0407</code>), <code>origin-deltainfo.dat</code> (<code>0x0408</code>), <code>psreserved.dat</code> (<code>0x0409</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1000</code> .. <code>0x1008</code></td>
+                        <td><code>sce_sys/</code> Core</td>
+                        <td><code>param.sfo</code> (<code>0x1000</code>), <code>playgo-chunk.dat</code> (<code>0x1001</code>), <code>playgo-chunk.sha</code> (<code>0x1002</code>), <code>playgo-manifest.xml</code> (<code>0x1003</code>), <code>pronunciation.xml</code> (<code>0x1004</code>), <code>pronunciation.sig</code> (<code>0x1005</code>), <code>pic1.png</code> (<code>0x1006</code>), <code>pubtoolinfo.dat</code> (<code>0x1007</code>), <code>app/playgo-chunk.dat</code> (<code>0x1008</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1200</code> .. <code>0x1260</code></td>
+                        <td>Shell Media</td>
+                        <td><code>icon0.png</code> (<code>0x1200</code>), <code>pic0.png</code> (<code>0x1220</code>), <code>snd0.at9</code> (<code>0x1240</code>), <code>changeinfo/changeinfo.xml</code> (<code>0x1260</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1400+</code></td>
+                        <td>Trophies</td>
+                        <td><code>trophy/trophy00.trp</code> (and localized/additional trophy sets)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>CNT pkg_content_flags &amp; PFS mode Bitmasks</caption>
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Mask</th>
+                        <th>Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>pkg_content_flags</code></td>
+                        <td><code>0x80000000</code></td>
+                        <td>GD (Game Data / Application) flag.</td>
+                    </tr>
+                    <tr>
+                        <td><code>pkg_content_flags</code></td>
+                        <td><code>0x08000000</code></td>
+                        <td>Patch / First Patch indicator.</td>
+                    </tr>
+                    <tr>
+                        <td><code>pkg_content_flags</code></td>
+                        <td><code>0x02000000</code></td>
+                        <td>Non-game / application flag.</td>
+                    </tr>
+                    <tr>
+                        <td><code>pkg_content_flags</code></td>
+                        <td><code>0x00800000</code></td>
+                        <td>Overwrite allowed on install.</td>
+                    </tr>
+                    <tr>
+                        <td><code>PFS.mode</code></td>
+                        <td><code>0x0001</code></td>
+                        <td>Signed PFS (uses <code>dinodeS32</code> records with 32-byte block SHA-256/HMAC digests).</td>
+                    </tr>
+                    <tr>
+                        <td><code>PFS.mode</code></td>
+                        <td><code>0x0002</code></td>
+                        <td>IsDisc (disc-mastered PFS layout).</td>
+                    </tr>
+                    <tr>
+                        <td><code>PFS.mode</code></td>
+                        <td><code>0x0004</code></td>
+                        <td>Encrypted PFS (XTS-AES-128 sector/block encryption via <code>EKpfs</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>PFS.mode</code></td>
+                        <td><code>0x0008</code></td>
+                        <td>64 KiB / large block mode flag.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <p><strong>CNT Entry Encryption Check &amp; PFS Inode Sizing:</strong></p>
+        <pre><code>// CNT Entry encryption check (flags1 is u32be):
+is_encrypted = (entry.flags1 &amp; 0x80000000) != 0
+key_index    = (entry.flags1 &amp; 0x0000F000) &gt;&gt; 12   // or flags2 depending on entry type
+padded_size  = (entry.size + 15) &amp; ~15              // AES-128 block alignment
+
+// PFS dinode table location:
+dinode_table_offset = pfs_image_offset + pfs.blocks_size
+// dinodeD32 (unsigned): 168 bytes (0xA8) per inode
+// dinodeS32 (signed):   368 bytes (0x170) per inode (includes 32-byte block hashes)</code></pre>
+    </section>
+
+    <section class="section" id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Encrypted vs. Unencrypted CNT Entries:</strong> System metadata entries (<code>param.sfo</code>, <code>icon0.png</code>, <code>playgo-chunk.dat</code>) often appear unencrypted or encrypted under the package's entry key table (<code>id == 0x0010</code>), whereas DRM/license entries (<code>0x0400..0x0409</code>) are encrypted using RSA-wrapped entry keys and passcode-derived keys. Always check bit 31 (<code>0x80000000</code>) of <code>flags1</code> before reading raw bytes.</li>
+            <li><strong>PFS Image Inside PKG vs. Raw Directory:</strong> Inside a <code>.pkg</code>, the PFS image at <code>pfs_image_offset</code> is typically encrypted with <code>EKpfs</code> (XTS-AES-128) and signed (<code>PFS.mode &amp; 0x05</code>). Orbis OS mounts the PFS image transparently as a read-only block filesystem after verifying the superblock and HMAC/SHA-256 block hashes, exposing <code>uroot/sce_sys/</code> and <code>uroot/eboot.bin</code> as a normal VFS directory.</li>
+            <li><strong>Directory Block Boundary Rule:</strong> A PFS <code>dirent</code> never crosses a <code>blocks_size</code> boundary. If the remaining space in the current block is smaller than the next entry, the preceding entry's <code>entsize</code> is stretched to consume the rest of the block, and the next entry begins at offset <code>0</code> of the next block.</li>
+            <li><strong>Indirect Block Pointers:</strong> Standard <code>dinodeD32</code> / <code>dinodeS32</code> records hold 12 direct block pointers and 5 indirect block pointers (single/double indirect) to address files larger than <code>12 * blocks_size</code>.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="pseudocode">
+        <h2>5. Step-by-Step Pseudocode</h2>
+        <pre><code>function ParsePs4PkgAndPfsHeader(pkg_bytes):
+    if len(pkg_bytes) &lt; 0x1000:
+        error("Truncated CNT PKG header")
+
+    // 1. Read Big-Endian CNT Header
+    if read_u32be(pkg_bytes, 0x000) != 0x7F434E54:
+        error("Invalid PS4 PKG magic (expected \\x7FCNT)")
+
+    entry_count  = read_u32be(pkg_bytes, 0x010)
+    table_offset = read_u32be(pkg_bytes, 0x018)
+    content_id   = decode_ascii(pkg_bytes[0x040 : 0x064]).rstrip("\x00")
+    content_type = read_u32be(pkg_bytes, 0x074)
+    pfs_offset   = read_u64be(pkg_bytes, 0x408)
+    pfs_size     = read_u64be(pkg_bytes, 0x410)
+
+    if table_offset + entry_count * 0x20 &gt; len(pkg_bytes):
+        error("CNT Entry Table out of bounds")
+
+    // 2. Parse Big-Endian CNT Entry Table
+    entries = []
+    names_entry = null
+    for i in 0 .. entry_count - 1:
+        off = table_offset + i * 0x20
+        e = {
+            id:              read_u32be(pkg_bytes, off + 0x00),
+            filename_offset: read_u32be(pkg_bytes, off + 0x04),
+            flags1:          read_u32be(pkg_bytes, off + 0x08),
+            flags2:          read_u32be(pkg_bytes, off + 0x0C),
+            offset:          read_u32be(pkg_bytes, off + 0x10),
+            size:            read_u32be(pkg_bytes, off + 0x14),
+        }
+        if e.offset + e.size &gt; len(pkg_bytes):
+            error("CNT entry payload out of bounds")
+        if e.id == 0x0200:
+            names_entry = e
+        entries.append(e)
+
+    // 3. Inspect Embedded Little-Endian PFS Superblock (when unencrypted/decrypted)
+    if pfs_offset + 0x50 &gt; len(pkg_bytes):
+        error("PFS image offset out of bounds")
+
+    pfs_version = read_u64le(pkg_bytes, pfs_offset + 0x00)
+    pfs_magic   = read_u64le(pkg_bytes, pfs_offset + 0x08)
+    if pfs_magic == 20130315:
+        pfs_mode        = read_u16le(pkg_bytes, pfs_offset + 0x1C)
+        blocks_size     = read_u32le(pkg_bytes, pfs_offset + 0x20)
+        ndinode         = read_u64le(pkg_bytes, pfs_offset + 0x30)
+        superroot_ino   = read_u64le(pkg_bytes, pfs_offset + 0x48)
+        pfs_status      = "Plaintext/Decrypted PFS Superblock"
+    else:
+        pfs_status      = "Encrypted PFS Image (EKpfs required)"
+
+    return {
+        content_id: content_id,
+        content_type: content_type,
+        cnt_entries: entries,
+        pfs_status: pfs_status
+    }</code></pre>
+    </section>
+
+    <section class="section" id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <div class="badge-group">
+            <span class="badge confidence-confirmed">Confirmed: CNT Header, Entry Table &amp; PFS Superblock</span>
+            <span class="badge confidence-revision">Revision-Dependent: EKC / Content Flag Bits</span>
+            <span class="badge confidence-unverified">Crypto-Gated: EKpfs, Entry Keys &amp; Retail Passcodes</span>
+        </div>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> The big-endian CNT header offsets (<code>0x000..0x477</code>), 32-byte CNT entry records, standard entry IDs (<code>0x0001..0x1400+</code>), and the little-endian PFS superblock (<code>magic = 20130315</code>) and <code>dirent</code> format are consistently verified across Orbis OS package builders and open-source PFS readers.</li>
+            <li><strong>Crypto-Gated Components:</strong> Retail <code>.pkg</code> entry key decryption (entry <code>0x0010</code>), <code>EKpfs</code> derivation (entry <code>0x0020</code>), and package passcodes require authorized keys or passcode inputs and cannot be bypassed from header metadata alone.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Security &amp; Key Exclusion Notice:</strong> Do NOT embed retail Sony RSA keys, AES key schedules, or package passcodes. An independent parser should extract unencrypted CNT entries directly and surface a clear authentication/decryption boundary for encrypted entries or encrypted PFS blocks.</p>
+        </aside>
+    </section>
+</body>
+</html>

@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>.gba Cartridge ROM Header — Game Boy Advance — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#gba" target="_top">Game Boy Advance</a><span>/</span><span>.gba Cartridge ROM Header</span>
+    </nav>
+
+    <h1>.gba Cartridge ROM Header, Nintendo Logo &amp; Complement Check</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Game Boy Advance &middot; Cartridge ROM Image Header Specification</p>
+        <p>Every Game Boy Advance Game Pak ROM image begins with a fixed 192-byte (<code>0xC0</code>) platform header mapped at physical base address <code>0x08000000</code>. The internal 16 KiB BIOS strictly enforces the ARM reset branch, the 156-byte Huffman-compressed Nintendo Logo sequence, the fixed identifier byte <code>0x96</code>, and the 8-bit complement checksum before transferring control to cartridge code.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.gba</code>, <code>*.agb</code>, <code>*.bin</code> (raw linear Game Pak ROM dump)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>0x96</code> at offset <code>0x0B2</code>; 156-byte logo starting <code>24 FF AE 51 ... D4 F8 07</code> at <code>0x004&ndash;0x09F</code>; ARM branch <code>0xEAxxxxxx</code> at <code>0x000</code></dd>
+            <dt>Endianness</dt>
+            <dd>Little-Endian (ARM7TDMI instruction words and integer fields)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo Game Boy Advance (AGB) Game Pak ROM slot (WS0 <code>0x08000000&ndash;0x09FFFFFF</code>, max 32 MiB)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Executable cartridge ROM image (<code>application/x-gba-rom</code>, unofficial)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>A raw <code>.gba</code> image has no external container wrapper: byte <code>0x00000000</code> of the file corresponds directly to CPU address <code>0x08000000</code> (and mirrors <code>0x0A000000</code> / <code>0x0C000000</code>). The cartridge header occupies offsets <code>0x000&ndash;0x0BF</code> (192 bytes) and is shared identically by Cartridge ROM images and <a href="../../index.html#gba-multiboot" target="_top">Multiboot images</a>, which append additional vectors at <code>0x0C0&ndash;0x0E3</code>.</p>
+        <ul>
+            <li><strong>Hardware / BIOS Revisions:</strong> Identical header verification logic applies across original AGB-001, AGB-SP (AGS-001/101), Game Boy Micro (OXY-001), Game Boy Player, and Nintendo DS / DS Lite GBA-mode BIOS.</li>
+            <li><strong>Magic Hex &amp; ASCII Signatures:</strong>
+                <ul>
+                    <li><code>0x000&ndash;0x003</code>: Typically <code>xx xx xx EA</code> (little-endian ARM unconditional branch opcode <code>B target</code>).</li>
+                    <li><code>0x004&ndash;0x09F</code>: Exact 156-byte compressed Nintendo Logo payload (compared byte-for-byte or after BIOS decompression against the BIOS reference).</li>
+                    <li><code>0x0B2</code>: Fixed magic byte <code>0x96</code>.</li>
+                    <li><code>0x0A0&ndash;0x0B1</code>: Uppercase ASCII Title (12 bytes), Game Code (4 bytes), and Maker Code (2 bytes).</li>
+                </ul>
+            </li>
+            <li><strong>Endianness Rules:</strong> All multi-byte integers and ARM7TDMI instructions in the header are stored in little-endian byte order.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="GBA Cartridge ROM Header Layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Standard .gba Cartridge Header (Offsets 0x000&ndash;0x0BF, 192 Bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x000</code></td>
+                        <td>4 B</td>
+                        <td>u32le</td>
+                        <td>ROM Entry Point</td>
+                        <td>32-bit ARM instruction executed at <code>0x08000000</code> on cartridge boot; normally an unconditional branch <code>B &lt;start&gt;</code> (bits <code>31..24 = 0xEA</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x004</code></td>
+                        <td>156 B</td>
+                        <td>u8[156]</td>
+                        <td>Nintendo Logo</td>
+                        <td>Compressed Nintendo logo bitmap data (4-byte BIOS Huffman header omitted; supplied internally by BIOS). Must match the exact 156-byte hardware sequence.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0A0</code></td>
+                        <td>12 B</td>
+                        <td>char[12]</td>
+                        <td>Game Title</td>
+                        <td>Uppercase ASCII title string, padded on the right with <code>0x00</code> bytes. Included in complement check.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0AC</code></td>
+                        <td>4 B</td>
+                        <td>char[4]</td>
+                        <td>Game Code</td>
+                        <td>4-character uppercase ASCII product identifier (<code>T CC R</code>: category, 2-char unique code, region/language). Included in complement check.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0B0</code></td>
+                        <td>2 B</td>
+                        <td>char[2]</td>
+                        <td>Maker Code</td>
+                        <td>2-character uppercase ASCII licensee/publisher code (e.g., <code>"01"</code> for first-party hardware vendor). Included in complement check.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0B2</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Fixed Value</td>
+                        <td>Mandatory constant <code>0x96</code>. Boot fails if any other value is present. Included in complement check.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0B3</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Main Unit Code</td>
+                        <td>Target hardware identifier; must be <code>0x00</code> for standard GBA models. Included in complement check.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0B4</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Device Type</td>
+                        <td>Normally <code>0x00</code>. Bit 7 (<code>0x80</code>) identifies hardware debugging units exposing debug RAM/control; included in complement check.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0B5</code></td>
+                        <td>7 B</td>
+                        <td>u8[7]</td>
+                        <td>Reserved Area</td>
+                        <td>Zero-filled (<code>0x00</code>) on standard retail ROMs. Included in complement check.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0BC</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Software Version</td>
+                        <td>Revision number (<code>0x00</code> for initial release, incremented for mask ROM revisions). Final byte covered by complement check.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0BD</code></td>
+                        <td>1 B</td>
+                        <td>u8</td>
+                        <td>Complement Check</td>
+                        <td>8-bit header checksum calculated over bytes <code>0x0A0..0x0BC</code>. BIOS halts if invalid.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0BE</code></td>
+                        <td>2 B</td>
+                        <td>u16le</td>
+                        <td>Reserved Area</td>
+                        <td>Normally <code>0x0000</code>. Not covered by the complement check; followed immediately at <code>0x0C0</code> by cartridge code or multiboot header.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Game Code subfields" tabindex="0">
+            <table class="format-counts">
+                <caption>Game Code Sub-Record Layout (Offset 0x0AC, 4 Bytes)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Field</th>
+                        <th scope="col">Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0AC</code> (+0)</td>
+                        <td>1 B</td>
+                        <td>char</td>
+                        <td>Category / Type</td>
+                        <td>Single ASCII character indicating cartridge category (e.g., <code>'A'</code> normal, <code>'B'</code>/<code>'C'</code> extended series, <code>'F'</code> NES Classics, <code>'K'</code> acceleration sensor, <code>'P'</code> e-Reader, <code>'R'</code> rumble/gyro, <code>'U'</code> RTC + solar sensor, <code>'V'</code> rumble).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0AD</code> (+1)</td>
+                        <td>2 B</td>
+                        <td>char[2]</td>
+                        <td>Unique Title ID</td>
+                        <td>Two uppercase alphanumeric ASCII characters distinguishing the software product within the category.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0AF</code> (+3)</td>
+                        <td>1 B</td>
+                        <td>char</td>
+                        <td>Destination / Language</td>
+                        <td>Single ASCII region/language character (e.g., <code>'J'</code> Japan, <code>'E'</code> USA/English, <code>'P'</code> Europe/Multi, <code>'D'</code> German, <code>'F'</code> French, <code>'I'</code> Italian, <code>'S'</code> Spanish).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Exact 156-Byte Nintendo Logo Sequence (<code>0x004&ndash;0x09F</code>)</h3>
+        <pre><code>24 FF AE 51 69 9A A2 21 3D 84 82 0A 84 E4 09 AD
+11 24 8B 98 C0 81 7F 21 A3 52 BE 19 93 09 CE 20
+10 46 4A 4A F8 27 31 EC 58 C7 E8 33 82 E3 CE BF
+85 F4 DF 94 CE 4B 09 C1 94 56 8A C0 13 72 A7 FC
+9F 84 4D 73 A3 CA 9A 61 58 97 A3 27 FC 03 98 76
+23 1D C7 61 03 04 AE 56 BF 38 84 00 40 A7 0E FD
+FF 52 FE 03 6F 95 30 F1 97 FB C0 85 60 D6 80 25
+A9 63 BE 03 01 4E 38 E2 F9 A2 34 FF BB 3E 03 44
+78 00 90 CB 88 11 3A 94 65 C0 7C 63 87 F0 3C AF
+D6 25 E4 8B 38 0A AC 72 21 D4 F8 07</code></pre>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>Complement Check Formula (<code>0x0BD</code>)</h3>
+        <p>The 8-bit complement check at <code>0x0BD</code> validates the 29 bytes spanning <code>0x0A0..0x0BC</code>:</p>
+        <pre><code>sum = 0
+for i in 0x0A0 .. 0x0BC:
+    sum = (sum + rom[i]) &amp; 0xFF
+expected_complement = (-(sum + 0x19)) &amp; 0xFF
+# Equivalently:
+# expected_complement = (0x100 - ((sum + 0x19) &amp; 0xFF)) &amp; 0xFF
+# Verification condition:
+# (sum + 0x19 + rom[0x0BD]) &amp; 0xFF == 0</code></pre>
+
+        <h3>ARM Entrypoint Branch Decoding (<code>0x000</code>)</h3>
+        <p>The 32-bit little-endian instruction at <code>0x000</code> is evaluated in ARM state at PC = <code>0x08000000</code> (with ARM7TDMI 2-stage pipeline prefetch offset <code>+8</code>):</p>
+        <pre><code>word0 = read_u32le(rom, 0x000)
+cond_and_op = (word0 &gt;&gt; 24) &amp; 0xFF    # 0xEA = unconditional ARM B
+imm24 = word0 &amp; 0x00FFFFFF
+if (imm24 &amp; 0x00800000) != 0:
+    offset_words = imm24 - 0x01000000  # sign-extend 24-bit value
+else:
+    offset_words = imm24
+target_address = (0x08000000 + 8 + (offset_words &lt;&lt; 2)) &amp; 0xFFFFFFFF</code></pre>
+
+        <div class="table-scroll" role="region" aria-label="Device Type and Unit Code flags" tabindex="0">
+            <table class="format-counts">
+                <caption>Header Control Byte Encodings (0x0B2&ndash;0x0B4)</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Offset</th>
+                        <th scope="col">Value / Mask</th>
+                        <th scope="col">Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0B2</code></td>
+                        <td><code>0x96</code></td>
+                        <td>Required fixed identifier byte; any other value causes BIOS boot failure.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0B3</code></td>
+                        <td><code>0x00</code></td>
+                        <td>Standard Game Boy Advance main unit code.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0B4</code></td>
+                        <td><code>0x00</code></td>
+                        <td>Normal retail cartridge / non-debug unit.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0B4</code></td>
+                        <td><code>0x80</code> (bit 7)</td>
+                        <td>Hardware debugger flag; indicates AGB debug monitor/DACS target support (bits <code>0..6</code> reserved).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Minimum &amp; Maximum Size Bounds:</strong> A valid ROM image must be at least <code>0xC0</code> (192) bytes to hold the header, and cannot exceed <code>32 MiB</code> (<code>0x02000000</code> bytes) in the standard <code>0x08000000&ndash;0x09FFFFFF</code> Game Pak aperture.</li>
+            <li><strong>ROM Mirroring &amp; Open-Bus Reads:</strong> Commercial Game Pak ROMs are typically power-of-two sizes (4 MiB, 8 MiB, 16 MiB, 32 MiB). Addresses beyond the physical mask ROM size mirror the ROM or return Game Pak open-bus values (<code>(address &gt;&gt; 1) &amp; 0xFFFF</code> on the multiplexed 16-bit address/data bus).</li>
+            <li><strong>Cartridge GPIO / RTC Overlap at <code>0x080000C4&ndash;0x080000C9</code>:</strong> Cartridges containing General Purpose I/O peripherals (such as Real-Time Clocks, solar sensors, or rumble motors) expose three 16-bit write/read registers at <code>0x080000C4</code> (Data), <code>0x080000C6</code> (Direction), and <code>0x080000C8</code> (Control). When GPIO read-back is enabled, reads at <code>0x080000C4..0x080000C9</code> return GPIO pins rather than ROM data; normal parsers reading raw <code>.gba</code> files still see the underlying ROM bytes at <code>0x0C4..0x0C9</code>.</li>
+            <li><strong>Entrypoint vs. Multiboot Coexistence:</strong> Dual-purpose images sometimes populate both <code>0x000</code> (cartridge reset branch) and <code>0x0C0</code> (multiboot RAM branch). A cartridge ROM parser treats <code>0x000</code> as the primary reset vector mapped at <code>0x08000000</code> and only inspects <code>0x0C0</code> if checking for multiboot capability.</li>
+            <li><strong>Strict Logo Verification:</strong> Real GBA BIOS hardware decompresses the 156 bytes at <code>0x004&ndash;0x09F</code> (prepending its internal Huffman header) and compares the result; in practice, only the exact 156-byte sequence above passes hardware boot. Note that some development/BIOS-bypass contexts skip logo validation, so static parsers should report logo mismatch as a validation failure rather than aborting header field extraction.</li>
+            <li><strong>Generalized Loader Mapping:</strong> Load the raw ROM linearly at virtual/physical base <code>0x08000000</code> (and mirror to <code>0x0A000000</code> and <code>0x0C000000</code>). Do not apply emulator-specific save patching or game-specific overrides at header parse time.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>NINTENDO_LOGO_BYTES = [
+    0x24, 0xFF, 0xAE, 0x51, 0x69, 0x9A, 0xA2, 0x21, 0x3D, 0x84, 0x82, 0x0A, 0x84, 0xE4, 0x09, 0xAD,
+    0x11, 0x24, 0x8B, 0x98, 0xC0, 0x81, 0x7F, 0x21, 0xA3, 0x52, 0xBE, 0x19, 0x93, 0x09, 0xCE, 0x20,
+    0x10, 0x46, 0x4A, 0x4A, 0xF8, 0x27, 0x31, 0xEC, 0x58, 0xC7, 0xE8, 0x33, 0x82, 0xE3, 0xCE, 0xBF,
+    0x85, 0xF4, 0xDF, 0x94, 0xCE, 0x4B, 0x09, 0xC1, 0x94, 0x56, 0x8A, 0xC0, 0x13, 0x72, 0xA7, 0xFC,
+    0x9F, 0x84, 0x4D, 0x73, 0xA3, 0xCA, 0x9A, 0x61, 0x58, 0x97, 0xA3, 0x27, 0xFC, 0x03, 0x98, 0x76,
+    0x23, 0x1D, 0xC7, 0x61, 0x03, 0x04, 0xAE, 0x56, 0xBF, 0x38, 0x84, 0x00, 0x40, 0xA7, 0x0E, 0xFD,
+    0xFF, 0x52, 0xFE, 0x03, 0x6F, 0x95, 0x30, 0xF1, 0x97, 0xFB, 0xC0, 0x85, 0x60, 0xD6, 0x80, 0x25,
+    0xA9, 0x63, 0xBE, 0x03, 0x01, 0x4E, 0x38, 0xE2, 0xF9, 0xA2, 0x34, 0xFF, 0xBB, 0x3E, 0x03, 0x44,
+    0x78, 0x00, 0x90, 0xCB, 0x88, 0x11, 0x3A, 0x94, 0x65, 0xC0, 0x7C, 0x63, 0x87, 0xF0, 0x3C, 0xAF,
+    0xD6, 0x25, 0xE4, 0x8B, 0x38, 0x0A, 0xAC, 0x72, 0x21, 0xD4, 0xF8, 0x07
+]
+
+function parse_gba_rom_header(bytes):
+    if len(bytes) &lt; 0xC0:
+        error("File smaller than 192-byte GBA ROM header")
+    if len(bytes) &gt; 0x02000000:
+        warn("ROM exceeds 32 MiB Game Pak window (0x08000000..0x09FFFFFF)")
+
+    entry_opcode = read_u32le(bytes, 0x000)
+    is_arm_branch = ((entry_opcode &gt;&gt; 24) &amp; 0xFF) == 0xEA
+    entry_target = null
+    if is_arm_branch:
+        imm24 = entry_opcode &amp; 0x00FFFFFF
+        if (imm24 &amp; 0x00800000) != 0:
+            imm24 -= 0x01000000
+        entry_target = (0x08000000 + 8 + (imm24 &lt;&lt; 2)) &amp; 0xFFFFFFFF
+
+    logo_valid = (bytes[0x004 : 0x0A0] == NINTENDO_LOGO_BYTES)
+
+    title_raw  = bytes[0x0A0 : 0x0AC]
+    title      = decode_ascii_trim_null(title_raw)
+    game_code  = decode_ascii(bytes[0x0AC : 0x0B0])
+    maker_code = decode_ascii(bytes[0x0B0 : 0x0B2])
+
+    fixed_byte   = bytes[0x0B2]
+    main_unit    = bytes[0x0B3]
+    device_type  = bytes[0x0B4]
+    reserved_b5  = bytes[0x0B5 : 0x0BC]
+    sw_version   = bytes[0x0BC]
+    complement   = bytes[0x0BD]
+    reserved_be  = read_u16le(bytes, 0x0BE)
+
+    # Complement check over 0x0A0..0x0BC
+    sum_bytes = 0
+    for i in range(0x0A0, 0x0BD):
+        sum_bytes = (sum_bytes + bytes[i]) &amp; 0xFF
+    expected_complement = (-(sum_bytes + 0x19)) &amp; 0xFF
+    checksum_valid = (complement == expected_complement)
+
+    # Generalized loader mapping
+    rom_map_size = min(len(bytes), 0x02000000)
+    map_region(base=0x08000000, data=bytes[0 : rom_map_size])  # WS0
+    map_region(base=0x0A000000, data=bytes[0 : rom_map_size])  # WS1 mirror
+    map_region(base=0x0C000000, data=bytes[0 : rom_map_size])  # WS2 mirror
+
+    return {
+        entry_opcode, is_arm_branch, entry_target,
+        logo_valid, title, game_code, maker_code,
+        fixed_byte_valid = (fixed_byte == 0x96),
+        main_unit, device_type, sw_version,
+        complement, expected_complement, checksum_valid
+    }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>Header offsets <code>0x000&ndash;0x0BF</code>, the 156-byte Huffman logo sequence, the fixed byte <code>0x96</code>, the complement check over <code>0x0A0&ndash;0x0BC</code>, and the 32 MiB <code>0x08000000</code> ROM mapping are <span class="badge confidence-confirmed">Confirmed Hardware/BIOS Spec</span> behaviors verified against GBA BIOS ROM execution and GBATEK documentation.</p>
+        <aside class="callout-warn" aria-label="Header field caveats">
+            <p><strong>Reserved &amp; Peripheral Caveats:</strong> Fields at <code>0x0B5&ndash;0x0BB</code> and <code>0x0BE&ndash;0x0BF</code> are reserved/zero-filled on standard retail cartridges (<span class="badge confidence-reserved">Reserved</span>); hardware debugging flags at <code>0x0B4</code> bit 7 and cartridge-specific GPIO registers at <code>0x080000C4&ndash;0x080000C9</code> depend on cartridge PCB hardware rather than the base Game Pak ROM specification. Additionally, save media type is <strong>not</strong> stored in the 192-byte header and must be identified separately via <a href="../../index.html#gba-bios-save" target="_top">SDK save ID strings</a>.</p>
+        </aside>
+    </section>
+</body>
+</html>

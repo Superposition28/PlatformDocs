@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PlatformDocs — Platform-Inherited Binary Format Specifications</title>
+    <link rel="stylesheet" href="style/main.css">
+</head>
+<body>
+    <nav class="topbar" aria-label="Primary navigation">
+        <a class="brand" href="#home">PlatformDocs</a>
+        <div class="topbar-links">
+            <a href="#home">Home</a>
+            <a href="#docs-guide">Guide</a>
+            <a href="javascript:history.back()">Back</a>
+            <a id="up-link" href="#home">Up</a>
+        </div>
+    </nav>
+
+    <main class="pages">
+        <section class="page home-page home-layout" id="home">
+            <section class="doc-overview home-intro" aria-labelledby="home-intro-title">
+                <p class="eyebrow">CLEAN-ROOM PLATFORM REFERENCE</p>
+                <h1 id="home-intro-title">PlatformDocs: Platform-Inherited Binary Formats</h1>
+                <p>PlatformDocs documents binary container, filesystem, executable, relocatable module, firmware, and OS metadata formats inherited directly from <strong>11 hardware and operating system platforms</strong>. Every specification is written to a clean-room 6-section standard with exact hex offsets, fixed-width types, decoding formulas, bounds rules, and parser pseudocode.</p>
+                <p><strong>Strict Scope Boundary:</strong> Only platform-mandated, firmware-loaded, and OS-defined formats are included. All title-specific assets, third-party middleware files, and studio engine formats are excluded.</p>
+                <ul class="overview-links">
+                    <li><a href="#docs-guide">Read the Documentation Guide</a></li>
+                    <li><span class="scope-badge">11 Platforms</span></li>
+                    <li><span class="scope-badge">42 Format Specifications</span></li>
+                    <li><span class="badge confidence-confirmed">Pure Static file:// Shell</span></li>
+                </ul>
+            </section>
+
+            <section class="format-coverage" aria-labelledby="platform-coverage-title">
+                <div class="format-coverage-heading">
+                    <h2 id="platform-coverage-title">Platform Coverage &amp; Legend</h2>
+                    <p>Coverage across 11 platforms and 42 platform-inherited format specifications. See the <a href="#docs-guide">Documentation Guide</a> for the 6-section specification standard and executable loader rules.</p>
+                </div>
+                <p class="coverage-summary"><strong>11 platforms · 42 format specifications</strong> — pure static <code>file://</code> reference with lazy iframe routing.</p>
+                <ul class="format-coverage-legend" aria-label="Confidence and scope legend">
+                    <li><span class="coverage-icon coverage-green" role="img" aria-label="Confirmed specification"></span><strong>Confirmed Spec</strong> Hardware / public ABI verified</li>
+                    <li><span class="coverage-icon coverage-yellow" role="img" aria-label="SDK revision dependent"></span><strong>SDK-Revision-Dependent</strong> Varies by SDK / firmware</li>
+                    <li><span class="coverage-icon coverage-grey" role="img" aria-label="Unverified or reserved fields"></span><strong>Unverified / Reserved</strong> Opaque or reserved fields noted</li>
+                    <li><span class="coverage-icon coverage-blue" role="img" aria-label="Platform overview"></span><strong>Platform Overview</strong> Boot chain &amp; architecture index</li>
+                </ul>
+                <ul class="format-coverage-list">
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-green" role="img" aria-label="Game Boy Advance"></span>
+                        <div><strong><a href="#gba">Game Boy Advance (GBA)</a></strong> <span class="coverage-status">3 formats · ARM7TDMI · Little-Endian</span><span class="coverage-detail">Cartridge ROM header &amp; Nintendo logo, Multiboot XBOO/JOYBOOT, BIOS SWI &amp; SRAM/EEPROM/Flash save signatures.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-green" role="img" aria-label="Nintendo GameCube"></span>
+                        <div><strong><a href="#gamecube">Nintendo GameCube</a></strong> <span class="coverage-status">4 formats · PowerPC Gekko · Big-Endian</span><span class="coverage-detail">MiniDVD disc layout (boot.bin, bi2.bin, Apploader, fst.bin), DOL static executables, REL v1–v3 modules, opening.bnr banners.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-green" role="img" aria-label="Nintendo DS"></span>
+                        <div><strong><a href="#nds">Nintendo DS (NDS)</a></strong> <span class="coverage-status">4 formats · ARM9 + ARM7 · Little-Endian</span><span class="coverage-detail">NTR cartridge ROM &amp; NitroFS FNT/FAT, ARM9/ARM7 overlay tables, icon/title banner versions, NitroSDK runtime wrappers.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-yellow" role="img" aria-label="Nintendo Wii"></span>
+                        <div><strong><a href="#wii">Nintendo Wii</a></strong> <span class="coverage-status">4 formats · PowerPC Broadway · Big-Endian</span><span class="coverage-detail">Wii optical disc &amp; encrypted partition headers, WAD/TMD/Ticket packages, DOL/REL extensions, U8/IMET opening.bnr.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-yellow" role="img" aria-label="PlayStation Portable"></span>
+                        <div><strong><a href="#psp">PlayStation Portable (PSP)</a></strong> <span class="coverage-status">4 formats · MIPS Allegrex · Little-Endian</span><span class="coverage-detail">PBP EBOOT containers, PARAM.SFO descriptors, PRX/ELF relocatable user/kernel modules, UMD ISO-9660 &amp; PSP_GAME layout.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-green" role="img" aria-label="PlayStation 2"></span>
+                        <div><strong><a href="#ps2">PlayStation 2 (PS2)</a></strong> <span class="coverage-status">4 formats · MIPS EE + IOP · Little-Endian</span><span class="coverage-detail">SYSTEM.CNF boot configuration, Emotion Engine ELF32 executables, IOP IRX relocatable drivers, DVD/CD &amp; PSU/MC containers.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-yellow" role="img" aria-label="PlayStation 3"></span>
+                        <div><strong><a href="#ps3">PlayStation 3 (PS3)</a></strong> <span class="coverage-status">4 formats · Cell PPU/SPU · Big-Endian</span><span class="coverage-detail">SELF/EBOOT.BIN NPDRM wrappers &amp; ELF64, PARAM.SFO metadata, PKG distribution archives, TRP trophy packs.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-yellow" role="img" aria-label="PlayStation 4"></span>
+                        <div><strong><a href="#ps4">PlayStation 4 (PS4)</a></strong> <span class="coverage-status">4 formats · x86-64 Orbis · Little-Endian</span><span class="coverage-detail">SELF/FSELF signed ELF64 segments, PARAM.SFO Orbis keys, PKG/PFS4 packages, GP4 project manifests &amp; trophy packs.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-green" role="img" aria-label="Microsoft Windows"></span>
+                        <div><strong><a href="#windows">Microsoft Windows</a></strong> <span class="coverage-status">4 formats · x86 / x64 / ARM64 · Little-Endian</span><span class="coverage-detail">PE/COFF headers &amp; sections, import/export/base-relocation tables, .rsrc trees &amp; version info, PDB MSF &amp; MSI OLE2 containers.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-yellow" role="img" aria-label="Original Xbox"></span>
+                        <div><strong><a href="#xbox">Original Xbox</a></strong> <span class="coverage-status">3 formats · x86 Pentium III · Little-Endian</span><span class="coverage-detail">XBE executable headers &amp; kernel thunk tables, XDVDFS disc filesystem, XPR0/XPR1 resources &amp; signed savegame metadata.</span></div>
+                    </li>
+                    <li class="format-coverage-item">
+                        <span class="coverage-icon coverage-yellow" role="img" aria-label="Xbox 360"></span>
+                        <div><strong><a href="#xbox360">Xbox 360</a></strong> <span class="coverage-status">4 formats · PowerPC Xenon · Big-Endian</span><span class="coverage-detail">XEX2/XEX1 executables &amp; optional headers, STFS LIVE/PIRS/CON containers, XDBF resource databases, XGD2/XGD3 disc images.</span></div>
+                    </li>
+                </ul>
+            </section>
+
+            <nav class="documentation-tree" aria-labelledby="documentation-tree-title">
+                <div class="documentation-tree-heading">
+                    <h2 id="documentation-tree-title">Documentation Map</h2>
+                    <p>Browse all 11 platform overviews and 42 clean-room format specifications. Click any card title for the platform boot chain or select a format directly.</p>
+                </div>
+
+                <ul class="platform-grid">
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#gba">Game Boy Advance</a>
+                                <p class="platform-card-meta">ARM7TDMI · Little-Endian · Cartridge</p>
+                            </div>
+                            <span class="badge confidence-confirmed">3 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#gba-gba-rom"><span>GBA Cartridge ROM</span><code>.gba</code></a></li>
+                            <li><a href="#gba-multiboot"><span>Multiboot Image</span><code>.mb</code></a></li>
+                            <li><a href="#gba-bios-save"><span>BIOS &amp; Save Types</span><code>SRAM / Flash</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#gamecube">Nintendo GameCube</a>
+                                <p class="platform-card-meta">Gekko PPC · Big-Endian · MiniDVD</p>
+                            </div>
+                            <span class="badge confidence-confirmed">4 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#gamecube-disc-image"><span>Disc Image &amp; FST</span><code>.iso / .gcm</code></a></li>
+                            <li><a href="#gamecube-dol"><span>DOL Executable</span><code>.dol</code></a></li>
+                            <li><a href="#gamecube-rel"><span>REL Relocatable Module</span><code>.rel</code></a></li>
+                            <li><a href="#gamecube-bnr"><span>Opening Banner</span><code>opening.bnr</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#nds">Nintendo DS</a>
+                                <p class="platform-card-meta">ARM9 + ARM7 · Little-Endian · NTR Card</p>
+                            </div>
+                            <span class="badge confidence-confirmed">4 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#nds-nds-rom"><span>NDS ROM &amp; NitroFS</span><code>.nds</code></a></li>
+                            <li><a href="#nds-overlay-arm"><span>ARM Overlays</span><code>OVT / ARM9</code></a></li>
+                            <li><a href="#nds-banner-icon"><span>Banner &amp; Icon</span><code>icon / title</code></a></li>
+                            <li><a href="#nds-nitro-sdk"><span>NitroSDK Structures</span><code>SDK / DSi</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#wii">Nintendo Wii</a>
+                                <p class="platform-card-meta">Broadway PPC · Big-Endian · Optical/NAND</p>
+                            </div>
+                            <span class="badge confidence-revision">4 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#wii-wii-disc"><span>Wii Disc &amp; Partitions</span><code>.iso / .wbfs</code></a></li>
+                            <li><a href="#wii-wad"><span>WAD / TMD / Ticket</span><code>.wad</code></a></li>
+                            <li><a href="#wii-dol-rel"><span>Wii DOL &amp; REL</span><code>.dol / .rel</code></a></li>
+                            <li><a href="#wii-opening-bnr"><span>U8 &amp; Opening Banner</span><code>opening.bnr</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#psp">PlayStation Portable</a>
+                                <p class="platform-card-meta">Allegrex MIPS · Little-Endian · UMD/MS</p>
+                            </div>
+                            <span class="badge confidence-revision">4 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#psp-pbp"><span>PBP Container</span><code>EBOOT.PBP</code></a></li>
+                            <li><a href="#psp-param-sfo"><span>PARAM.SFO Metadata</span><code>PARAM.SFO</code></a></li>
+                            <li><a href="#psp-prx-elf"><span>PRX &amp; PSP ELF</span><code>.prx / .elf</code></a></li>
+                            <li><a href="#psp-umd-iso"><span>UMD ISO-9660 Layout</span><code>.iso / .cso</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#ps2">PlayStation 2</a>
+                                <p class="platform-card-meta">EE + IOP MIPS · Little-Endian · CD/DVD</p>
+                            </div>
+                            <span class="badge confidence-confirmed">4 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#ps2-system-cnf"><span>SYSTEM.CNF Boot Config</span><code>SYSTEM.CNF</code></a></li>
+                            <li><a href="#ps2-ee-elf"><span>Emotion Engine ELF32</span><code>ELF32</code></a></li>
+                            <li><a href="#ps2-irx"><span>IOP Relocatable Module</span><code>.irx</code></a></li>
+                            <li><a href="#ps2-ps2-containers"><span>PS2 Disc &amp; Save Containers</span><code>ISO / PSU</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#ps3">PlayStation 3</a>
+                                <p class="platform-card-meta">Cell PPU/SPU · Big-Endian · Blu-ray/PSN</p>
+                            </div>
+                            <span class="badge confidence-revision">4 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#ps3-self-eboot"><span>SELF / EBOOT.BIN</span><code>.self / .bin</code></a></li>
+                            <li><a href="#ps3-param-sfo"><span>PARAM.SFO Metadata</span><code>PARAM.SFO</code></a></li>
+                            <li><a href="#ps3-pkg"><span>PKG Package Archive</span><code>.pkg</code></a></li>
+                            <li><a href="#ps3-trp"><span>TRP Trophy Pack</span><code>TROPHY.TRP</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#ps4">PlayStation 4</a>
+                                <p class="platform-card-meta">x86-64 Orbis · Little-Endian · Blu-ray/PSN</p>
+                            </div>
+                            <span class="badge confidence-revision">4 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#ps4-self-fself"><span>SELF / FSELF Executable</span><code>.self / .prx</code></a></li>
+                            <li><a href="#ps4-param-sfo"><span>PARAM.SFO Orbis</span><code>param.sfo</code></a></li>
+                            <li><a href="#ps4-pkg"><span>PKG &amp; PFS4 Archive</span><code>.pkg</code></a></li>
+                            <li><a href="#ps4-gp4-trophy"><span>GP4 &amp; Trophy Pack</span><code>.gp4 / .trp</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#windows">Microsoft Windows</a>
+                                <p class="platform-card-meta">x86 / x64 / ARM64 · Little-Endian · PE/COFF</p>
+                            </div>
+                            <span class="badge confidence-confirmed">4 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#windows-pe-coff"><span>PE / COFF Headers</span><code>.exe / .dll</code></a></li>
+                            <li><a href="#windows-pe-tables"><span>PE Data Tables</span><code>IAT / Reloc</code></a></li>
+                            <li><a href="#windows-pe-resources"><span>PE Resource Tree</span><code>.rsrc</code></a></li>
+                            <li><a href="#windows-pdb-msi"><span>PDB &amp; MSI Containers</span><code>.pdb / .msi</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#xbox">Original Xbox</a>
+                                <p class="platform-card-meta">x86 Pentium III · Little-Endian · DVD/FATX</p>
+                            </div>
+                            <span class="badge confidence-revision">3 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#xbox-xbe"><span>XBE Executable</span><code>.xbe</code></a></li>
+                            <li><a href="#xbox-xdvdfs"><span>XDVDFS Disc Filesystem</span><code>.iso</code></a></li>
+                            <li><a href="#xbox-xpr-save"><span>XPR &amp; Save Metadata</span><code>.xpr / .xbx</code></a></li>
+                        </ul>
+                    </li>
+
+                    <li class="platform-card">
+                        <div class="platform-card-header">
+                            <div>
+                                <a class="platform-card-title" href="#xbox360">Xbox 360</a>
+                                <p class="platform-card-meta">Xenon PPC · Big-Endian · XGD/STFS</p>
+                            </div>
+                            <span class="badge confidence-revision">4 specs</span>
+                        </div>
+                        <ul class="platform-card-formats">
+                            <li><a href="#xbox360-xex"><span>XEX2 Executable</span><code>.xex</code></a></li>
+                            <li><a href="#xbox360-stfs"><span>STFS Package</span><code>LIVE / CON</code></a></li>
+                            <li><a href="#xbox360-xdbf"><span>XDBF Resource Database</span><code>.xdbf / SPA</code></a></li>
+                            <li><a href="#xbox360-xgd-iso"><span>XGD2 / XGD3 Disc Image</span><code>.iso</code></a></li>
+                        </ul>
+                    </li>
+                </ul>
+            </nav>
+        </section>
+
+        <!-- Lazy-loaded Guide -->
+        <iframe class="page" id="docs-guide" data-src="docs.html" src="about:blank" loading="lazy" title="Documentation Guide"></iframe>
+
+        <!-- Game Boy Advance -->
+        <iframe class="page" id="gba" data-src="platforms/gba/index.html" src="about:blank" loading="lazy" title="Game Boy Advance Overview"></iframe>
+        <iframe class="page" id="gba-gba-rom" data-src="platforms/gba/gba-rom.html" src="about:blank" loading="lazy" title="GBA Cartridge ROM Format"></iframe>
+        <iframe class="page" id="gba-multiboot" data-src="platforms/gba/multiboot.html" src="about:blank" loading="lazy" title="GBA Multiboot Image Format"></iframe>
+        <iframe class="page" id="gba-bios-save" data-src="platforms/gba/bios-save.html" src="about:blank" loading="lazy" title="GBA BIOS &amp; Save Types"></iframe>
+
+        <!-- Nintendo GameCube -->
+        <iframe class="page" id="gamecube" data-src="platforms/gamecube/index.html" src="about:blank" loading="lazy" title="Nintendo GameCube Overview"></iframe>
+        <iframe class="page" id="gamecube-disc-image" data-src="platforms/gamecube/disc-image.html" src="about:blank" loading="lazy" title="GameCube Disc Image &amp; FST"></iframe>
+        <iframe class="page" id="gamecube-dol" data-src="platforms/gamecube/dol.html" src="about:blank" loading="lazy" title="GameCube DOL Executable Format"></iframe>
+        <iframe class="page" id="gamecube-rel" data-src="platforms/gamecube/rel.html" src="about:blank" loading="lazy" title="GameCube REL Relocatable Module Format"></iframe>
+        <iframe class="page" id="gamecube-bnr" data-src="platforms/gamecube/bnr.html" src="about:blank" loading="lazy" title="GameCube Opening Banner Format"></iframe>
+
+        <!-- Nintendo DS -->
+        <iframe class="page" id="nds" data-src="platforms/nds/index.html" src="about:blank" loading="lazy" title="Nintendo DS Overview"></iframe>
+        <iframe class="page" id="nds-nds-rom" data-src="platforms/nds/nds-rom.html" src="about:blank" loading="lazy" title="Nintendo DS ROM &amp; NitroFS Format"></iframe>
+        <iframe class="page" id="nds-overlay-arm" data-src="platforms/nds/overlay-arm.html" src="about:blank" loading="lazy" title="Nintendo DS ARM Overlay Format"></iframe>
+        <iframe class="page" id="nds-banner-icon" data-src="platforms/nds/banner-icon.html" src="about:blank" loading="lazy" title="Nintendo DS Banner &amp; Icon Format"></iframe>
+        <iframe class="page" id="nds-nitro-sdk" data-src="platforms/nds/nitro-sdk.html" src="about:blank" loading="lazy" title="Nintendo DS NitroSDK Structures"></iframe>
+
+        <!-- Nintendo Wii -->
+        <iframe class="page" id="wii" data-src="platforms/wii/index.html" src="about:blank" loading="lazy" title="Nintendo Wii Overview"></iframe>
+        <iframe class="page" id="wii-wii-disc" data-src="platforms/wii/wii-disc.html" src="about:blank" loading="lazy" title="Wii Disc &amp; Partition Format"></iframe>
+        <iframe class="page" id="wii-wad" data-src="platforms/wii/wad.html" src="about:blank" loading="lazy" title="Wii WAD, TMD &amp; Ticket Format"></iframe>
+        <iframe class="page" id="wii-dol-rel" data-src="platforms/wii/dol-rel.html" src="about:blank" loading="lazy" title="Wii DOL &amp; REL Format"></iframe>
+        <iframe class="page" id="wii-opening-bnr" data-src="platforms/wii/opening-bnr.html" src="about:blank" loading="lazy" title="Wii U8 &amp; Opening Banner Format"></iframe>
+
+        <!-- PlayStation Portable -->
+        <iframe class="page" id="psp" data-src="platforms/psp/index.html" src="about:blank" loading="lazy" title="PlayStation Portable Overview"></iframe>
+        <iframe class="page" id="psp-pbp" data-src="platforms/psp/pbp.html" src="about:blank" loading="lazy" title="PSP PBP Container Format"></iframe>
+        <iframe class="page" id="psp-param-sfo" data-src="platforms/psp/param-sfo.html" src="about:blank" loading="lazy" title="PSP PARAM.SFO Format"></iframe>
+        <iframe class="page" id="psp-prx-elf" data-src="platforms/psp/prx-elf.html" src="about:blank" loading="lazy" title="PSP PRX &amp; ELF Format"></iframe>
+        <iframe class="page" id="psp-umd-iso" data-src="platforms/psp/umd-iso.html" src="about:blank" loading="lazy" title="PSP UMD ISO-9660 Layout"></iframe>
+
+        <!-- PlayStation 2 -->
+        <iframe class="page" id="ps2" data-src="platforms/ps2/index.html" src="about:blank" loading="lazy" title="PlayStation 2 Overview"></iframe>
+        <iframe class="page" id="ps2-system-cnf" data-src="platforms/ps2/system-cnf.html" src="about:blank" loading="lazy" title="PS2 SYSTEM.CNF Format"></iframe>
+        <iframe class="page" id="ps2-ee-elf" data-src="platforms/ps2/ee-elf.html" src="about:blank" loading="lazy" title="PS2 Emotion Engine ELF32 Format"></iframe>
+        <iframe class="page" id="ps2-irx" data-src="platforms/ps2/irx.html" src="about:blank" loading="lazy" title="PS2 IOP IRX Module Format"></iframe>
+        <iframe class="page" id="ps2-ps2-containers" data-src="platforms/ps2/ps2-containers.html" src="about:blank" loading="lazy" title="PS2 Disc &amp; Save Containers"></iframe>
+
+        <!-- PlayStation 3 -->
+        <iframe class="page" id="ps3" data-src="platforms/ps3/index.html" src="about:blank" loading="lazy" title="PlayStation 3 Overview"></iframe>
+        <iframe class="page" id="ps3-self-eboot" data-src="platforms/ps3/self-eboot.html" src="about:blank" loading="lazy" title="PS3 SELF &amp; EBOOT.BIN Format"></iframe>
+        <iframe class="page" id="ps3-param-sfo" data-src="platforms/ps3/param-sfo.html" src="about:blank" loading="lazy" title="PS3 PARAM.SFO Format"></iframe>
+        <iframe class="page" id="ps3-pkg" data-src="platforms/ps3/pkg.html" src="about:blank" loading="lazy" title="PS3 PKG Package Format"></iframe>
+        <iframe class="page" id="ps3-trp" data-src="platforms/ps3/trp.html" src="about:blank" loading="lazy" title="PS3 TRP Trophy Pack Format"></iframe>
+
+        <!-- PlayStation 4 -->
+        <iframe class="page" id="ps4" data-src="platforms/ps4/index.html" src="about:blank" loading="lazy" title="PlayStation 4 Overview"></iframe>
+        <iframe class="page" id="ps4-self-fself" data-src="platforms/ps4/self-fself.html" src="about:blank" loading="lazy" title="PS4 SELF &amp; FSELF Format"></iframe>
+        <iframe class="page" id="ps4-param-sfo" data-src="platforms/ps4/param-sfo.html" src="about:blank" loading="lazy" title="PS4 PARAM.SFO Format"></iframe>
+        <iframe class="page" id="ps4-pkg" data-src="platforms/ps4/pkg.html" src="about:blank" loading="lazy" title="PS4 PKG &amp; PFS4 Format"></iframe>
+        <iframe class="page" id="ps4-gp4-trophy" data-src="platforms/ps4/gp4-trophy.html" src="about:blank" loading="lazy" title="PS4 GP4 &amp; Trophy Pack Format"></iframe>
+
+        <!-- Microsoft Windows -->
+        <iframe class="page" id="windows" data-src="platforms/windows/index.html" src="about:blank" loading="lazy" title="Microsoft Windows Overview"></iframe>
+        <iframe class="page" id="windows-pe-coff" data-src="platforms/windows/pe-coff.html" src="about:blank" loading="lazy" title="Windows PE / COFF Header Format"></iframe>
+        <iframe class="page" id="windows-pe-tables" data-src="platforms/windows/pe-tables.html" src="about:blank" loading="lazy" title="Windows PE Data Tables Format"></iframe>
+        <iframe class="page" id="windows-pe-resources" data-src="platforms/windows/pe-resources.html" src="about:blank" loading="lazy" title="Windows PE Resource Tree Format"></iframe>
+        <iframe class="page" id="windows-pdb-msi" data-src="platforms/windows/pdb-msi.html" src="about:blank" loading="lazy" title="Windows PDB &amp; MSI Container Formats"></iframe>
+
+        <!-- Original Xbox -->
+        <iframe class="page" id="xbox" data-src="platforms/xbox/index.html" src="about:blank" loading="lazy" title="Original Xbox Overview"></iframe>
+        <iframe class="page" id="xbox-xbe" data-src="platforms/xbox/xbe.html" src="about:blank" loading="lazy" title="Original Xbox XBE Executable Format"></iframe>
+        <iframe class="page" id="xbox-xdvdfs" data-src="platforms/xbox/xdvdfs.html" src="about:blank" loading="lazy" title="Original Xbox XDVDFS Format"></iframe>
+        <iframe class="page" id="xbox-xpr-save" data-src="platforms/xbox/xpr-save.html" src="about:blank" loading="lazy" title="Original Xbox XPR &amp; Save Metadata"></iframe>
+
+        <!-- Xbox 360 -->
+        <iframe class="page" id="xbox360" data-src="platforms/xbox360/index.html" src="about:blank" loading="lazy" title="Xbox 360 Overview"></iframe>
+        <iframe class="page" id="xbox360-xex" data-src="platforms/xbox360/xex.html" src="about:blank" loading="lazy" title="Xbox 360 XEX2 Executable Format"></iframe>
+        <iframe class="page" id="xbox360-stfs" data-src="platforms/xbox360/stfs.html" src="about:blank" loading="lazy" title="Xbox 360 STFS Container Format"></iframe>
+        <iframe class="page" id="xbox360-xdbf" data-src="platforms/xbox360/xdbf.html" src="about:blank" loading="lazy" title="Xbox 360 XDBF Resource Database Format"></iframe>
+        <iframe class="page" id="xbox360-xgd-iso" data-src="platforms/xbox360/xgd-iso.html" src="about:blank" loading="lazy" title="Xbox 360 XGD2 / XGD3 Disc Image Format"></iframe>
+    </main>
+
+    <script>
+        (function () {
+            // Ordered longest-first so "xbox360-" is matched before "xbox-".
+            var platformSlugs = [
+                "gamecube",
+                "xbox360",
+                "windows",
+                "xbox",
+                "ps4",
+                "ps3",
+                "ps2",
+                "psp",
+                "wii",
+                "nds",
+                "gba"
+            ];
+            var upLink = document.getElementById("up-link");
+
+            function resolveUpHref(id) {
+                if (!id || id === "home" || id === "docs-guide") {
+                    return "#home";
+                }
+                for (var i = 0; i < platformSlugs.length; i++) {
+                    var slug = platformSlugs[i];
+                    if (id === slug) {
+                        return "#home";
+                    }
+                    if (id.indexOf(slug + "-") === 0) {
+                        return "#" + slug;
+                    }
+                }
+                return "#home";
+            }
+
+            function syncRoute() {
+                var id = (window.location.hash || "").replace(/^#/, "");
+                if (id) {
+                    var target = document.getElementById(id);
+                    if (target && target.tagName === "IFRAME") {
+                        var currentSrc = target.getAttribute("src");
+                        var dataSrc = target.dataset ? target.dataset.src : target.getAttribute("data-src");
+                        if (dataSrc && (!currentSrc || currentSrc === "about:blank")) {
+                            target.setAttribute("src", dataSrc);
+                        }
+                    }
+                }
+                if (upLink) {
+                    upLink.setAttribute("href", resolveUpHref(id));
+                }
+            }
+
+            window.addEventListener("load", syncRoute);
+            window.addEventListener("hashchange", syncRoute);
+            syncRoute();
+        })();
+    </script>
+</body>
+</html>

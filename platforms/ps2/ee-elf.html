@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Emotion Engine ELF32 — PlayStation 2 — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps2" target="_top">PlayStation 2</a><span>/</span><span>Emotion Engine ELF32 Executable</span>
+    </nav>
+
+    <h1>Emotion Engine ELF32-MIPS R5900 Executable</h1>
+
+    <section class="format-summary">
+        <p class="eyebrow">PLAYSTATION 2 · EMOTION ENGINE EXECUTABLE <span class="scope-badge">Platform-Inherited</span></p>
+        <p>The primary executable format for the PlayStation 2 Emotion Engine (EE) is a little-endian 32-bit Executable and Linkable Format (<code>ELFCLASS32</code>) binary targeting the MIPS R5900 processor (<code>e_machine = 8</code>). Although the R5900 provides 64-bit general-purpose registers and 128-bit multimedia extensions, EE executables use 32-bit virtual addresses (ILP32 pointer model with <code>EABI64</code> register conventions) and are mapped statically by the EE kernel loader (<code>EELOAD</code> / <code>LoadExecPS2</code>).</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd>Disc catalog ID (e.g. <code>SLUS_200.01</code>, <code>SCES_500.01</code>) or <code>*.ELF</code></dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>7F 45 4C 46</code> (<code>\x7FELF</code>) at offset <code>0x00</code></dd>
+            <dt>Endianness</dt>
+            <dd>Little-Endian (<code>EI_DATA = 1</code>, <code>ELFDATA2LSB</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 2 Emotion Engine (MIPS R5900, EE Kernel / <code>EELOAD</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Static EE executable image (<code>application/x-executable</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Memory Map</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Loader Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section class="section" id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>An EE executable is identified by the standard 16-byte ELF identification array (<code>7F 45 4C 46 01 01 01 ...</code>) combined with <code>e_type = 2</code> (<code>ET_EXEC</code>), <code>e_machine = 8</code> (<code>EM_MIPS</code>), and R5900 machine bits in <code>e_flags</code> (specifically <code>EF_MIPS_MACH_5900 = 0x00920000</code>). Unlike PS2 IOP <code>.irx</code> modules, retail EE executables are linked at fixed virtual addresses (commonly starting at <code>0x00100000</code> above the 1 MiB EE kernel region) and contain no runtime relocations.</p>
+    </section>
+
+    <section class="section" id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Elf32_Ehdr — ELF32 File Header (52 / 0x34 bytes at Offset 0x00)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u8[4]</code></td>
+                        <td><code>e_ident[EI_MAG0..3]</code></td>
+                        <td>Magic bytes <code>7F 45 4C 46</code> (<code>\x7FELF</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>e_ident[EI_CLASS]</code></td>
+                        <td><code>1</code> = <code>ELFCLASS32</code> (32-bit ELF container).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x05</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>e_ident[EI_DATA]</code></td>
+                        <td><code>1</code> = <code>ELFDATA2LSB</code> (Little-Endian).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x06</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>e_ident[EI_VERSION]</code></td>
+                        <td><code>1</code> = <code>EV_CURRENT</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x07</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>e_ident[EI_OSABI]</code></td>
+                        <td><code>0</code> = <code>ELFOSABI_NONE</code> (System V / bare-metal ABI).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>1</td>
+                        <td><code>u8</code></td>
+                        <td><code>e_ident[EI_ABIVERSION]</code></td>
+                        <td><code>0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x09</code></td>
+                        <td>7</td>
+                        <td><code>u8[7]</code></td>
+                        <td><code>e_ident[EI_PAD]</code></td>
+                        <td>Zero padding.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_type</code></td>
+                        <td><code>2</code> = <code>ET_EXEC</code> (static executable).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x12</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_machine</code></td>
+                        <td><code>8</code> = <code>EM_MIPS</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_version</code></td>
+                        <td><code>1</code> = <code>EV_CURRENT</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_entry</code></td>
+                        <td>EE virtual entry point address (commonly <code>0x00100000</code> or <code>0x00100008</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_phoff</code></td>
+                        <td>File offset of Program Header Table (typically <code>0x00000034</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_shoff</code></td>
+                        <td>File offset of Section Header Table (<code>0</code> when stripped).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x24</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>e_flags</code></td>
+                        <td>MIPS architecture, R5900 machine, and EABI flags (commonly <code>0x20924001</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_ehsize</code></td>
+                        <td>ELF header size in bytes (<code>0x34</code> = 52).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2A</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_phentsize</code></td>
+                        <td>Size of one Program Header entry (<code>0x20</code> = 32 bytes).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2C</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_phnum</code></td>
+                        <td>Number of Program Header entries.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2E</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_shentsize</code></td>
+                        <td>Size of one Section Header entry (<code>0x28</code> = 40 bytes, or <code>0</code> if stripped).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_shnum</code></td>
+                        <td>Number of Section Header entries (<code>0</code> if stripped).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x32</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>e_shstrndx</code></td>
+                        <td>Index of <code>.shstrtab</code> section name string table (<code>0</code> if stripped).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Elf32_Phdr — Program Header Entry (32 / 0x20 bytes at e_phoff + i * e_phentsize)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>p_type</code></td>
+                        <td>Segment type (<code>1</code> = <code>PT_LOAD</code>, <code>0x70000000</code> = <code>PT_MIPS_REGINFO</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>p_offset</code></td>
+                        <td>Byte offset of segment payload in the ELF file.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>p_vaddr</code></td>
+                        <td>Target virtual address in EE RAM.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>p_paddr</code></td>
+                        <td>Physical address (typically identical to <code>p_vaddr</code> on EE).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>p_filesz</code></td>
+                        <td>Number of bytes to copy from file into memory.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>p_memsz</code></td>
+                        <td>Total memory footprint of segment; <code>p_memsz - p_filesz</code> is zero-filled (<code>.bss</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>p_flags</code></td>
+                        <td>Permission bitmask: <code>PF_X</code> (<code>1</code>), <code>PF_W</code> (<code>2</code>), <code>PF_R</code> (<code>4</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>p_align</code></td>
+                        <td>Required alignment in file and memory (e.g. <code>0x10</code>, <code>0x80</code>, or <code>0x1000</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Elf32_Shdr — Section Header Entry (40 / 0x28 bytes, Present in Unstripped ELFs Only)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_name</code></td>
+                        <td>Byte offset into <code>.shstrtab</code> for section name.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_type</code></td>
+                        <td>Section type (<code>SHT_PROGBITS=1</code>, <code>SHT_SYMTAB=2</code>, <code>SHT_STRTAB=3</code>, <code>SHT_NOBITS=8</code>, <code>SHT_MIPS_REGINFO=0x70000006</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_flags</code></td>
+                        <td>Attribute bitmask (<code>SHF_WRITE=1</code>, <code>SHF_ALLOC=2</code>, <code>SHF_EXECINSTR=4</code>, <code>SHF_MIPS_GPREL=0x10000000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_addr</code></td>
+                        <td>Virtual address of section in EE RAM (<code>0</code> if non-allocatable).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_offset</code></td>
+                        <td>File offset of section data (unused for <code>SHT_NOBITS</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_size</code></td>
+                        <td>Section byte size.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_link</code></td>
+                        <td>Associated section index (e.g. <code>.strtab</code> for <code>.symtab</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_info</code></td>
+                        <td>Type-dependent auxiliary info (e.g. first non-local symbol index).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_addralign</code></td>
+                        <td>Required virtual alignment (power of 2).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x24</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>sh_entsize</code></td>
+                        <td>Fixed record size in bytes for table sections (<code>16</code> for <code>Elf32_Sym</code>), else <code>0</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Elf32_RegInfo — MIPS Register Info Block (24 / 0x18 bytes, Optional PT_MIPS_REGINFO / .reginfo)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>ri_gprmask</code></td>
+                        <td>Bitmask of general-purpose registers referenced by the binary.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>16</td>
+                        <td><code>u32le[4]</code></td>
+                        <td><code>ri_cprmask[4]</code></td>
+                        <td>Bitmasks for coprocessors CP0–CP3.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>s32le</code></td>
+                        <td><code>ri_gp_value</code></td>
+                        <td>Initial global pointer (<code>$gp</code>) value for small-data (<code>.sdata</code>/<code>.sbss</code>) addressing.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="flags">
+        <h2>3. Flags, Enums &amp; Memory Map</h2>
+
+        <h3>ELF Header <code>e_flags</code> Bitfields (GNU MIPS / R5900)</h3>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>EE ELF32 e_flags Masks and Constants</caption>
+                <thead>
+                    <tr>
+                        <th>Mask / Value</th>
+                        <th>Symbol</th>
+                        <th>Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00000001</code></td>
+                        <td><code>EF_MIPS_NOREORDER</code></td>
+                        <td>At least one <code>.noreorder</code> directive was used during assembly.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00000002</code></td>
+                        <td><code>EF_MIPS_PIC</code></td>
+                        <td>Contains position-independent code.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00000004</code></td>
+                        <td><code>EF_MIPS_CPIC</code></td>
+                        <td>Follows standard MIPS calling conventions for PIC interoperability.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0000F000</code></td>
+                        <td><code>EF_MIPS_ABI</code> (mask)</td>
+                        <td>ABI field: <code>0x00003000</code> = <code>E_MIPS_ABI_EABI32</code>, <code>0x00004000</code> = <code>E_MIPS_ABI_EABI64</code> (standard for EE R5900), <code>0x00001000</code> = <code>O32</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00FF0000</code></td>
+                        <td><code>EF_MIPS_MACH</code> (mask)</td>
+                        <td>Machine variant: <code>0x00920000</code> = <code>E_MIPS_MACH_5900</code> (Toshiba/Sony R5900 Emotion Engine).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0xF0000000</code></td>
+                        <td><code>EF_MIPS_ARCH</code> (mask)</td>
+                        <td>ISA level: <code>0x00000000</code> = MIPS I, <code>0x10000000</code> = MIPS II, <code>0x20000000</code> = MIPS III (typical EE setting), <code>0x30000000</code> = MIPS IV.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <p>A typical <code>ee-gcc</code> EE executable carries <code>e_flags = 0x20924001</code>, decoded as <code>EF_MIPS_ARCH_3 (0x20000000) | E_MIPS_MACH_5900 (0x00920000) | E_MIPS_ABI_EABI64 (0x00004000) | EF_MIPS_NOREORDER (0x00000001)</code>.</p>
+
+        <h3>Program &amp; Section Flags</h3>
+        <ul>
+            <li><strong><code>p_type</code>:</strong> <code>0</code> = <code>PT_NULL</code>, <code>1</code> = <code>PT_LOAD</code>, <code>4</code> = <code>PT_NOTE</code>, <code>6</code> = <code>PT_PHDR</code>, <code>0x70000000</code> = <code>PT_MIPS_REGINFO</code>.</li>
+            <li><strong><code>p_flags</code>:</strong> <code>0x1</code> = <code>PF_X</code> (executable), <code>0x2</code> = <code>PF_W</code> (writable), <code>0x4</code> = <code>PF_R</code> (readable).</li>
+            <li><strong><code>sh_flags</code>:</strong> <code>0x1</code> = <code>SHF_WRITE</code>, <code>0x2</code> = <code>SHF_ALLOC</code>, <code>0x4</code> = <code>SHF_EXECINSTR</code>, <code>0x10000000</code> = <code>SHF_MIPS_GPREL</code> (<code>$gp</code>-relative small data).</li>
+        </ul>
+
+        <h3>Emotion Engine Virtual Memory Regions</h3>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>EE User-Space Virtual Address Layout</caption>
+                <thead>
+                    <tr>
+                        <th>Virtual Range</th>
+                        <th>Size</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00000000 – 0x000FFFFF</code></td>
+                        <td>1 MiB</td>
+                        <td>EE Kernel / BIOS exception vectors and system state (protected from user <code>PT_LOAD</code> segments).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x00100000 – 0x01FFFFFF</code></td>
+                        <td>31 MiB</td>
+                        <td>Retail EE User RDRAM (standard load base <code>0x00100000</code>, extending up to 32 MiB ceiling).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02000000 – 0x07FFFFFF</code></td>
+                        <td>96 MiB</td>
+                        <td>Extended RAM present only on 128 MiB TOOL development units (unused in retail discs).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x70000000 – 0x70003FFF</code></td>
+                        <td>16 KiB</td>
+                        <td>EE Scratchpad RAM (SPR), fast on-chip SRAM.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader Rules</h2>
+        <ul>
+            <li><strong>Stripped vs. Unstripped Section Headers:</strong> Retail EE executables frequently strip all section headers and symbol tables (<code>e_shoff == 0</code>, <code>e_shnum == 0</code>, <code>e_shstrndx == 0</code>). Sony's <code>EELOAD</code> / <code>LoadExecPS2</code> loader uses <strong>only</strong> <code>Elf32_Phdr</code> entries and ignores section headers entirely. Tooling must never require <code>e_shnum &gt; 0</code> to load or analyze an EE ELF.</li>
+            <li><strong>Non-<code>PT_LOAD</code> Program Headers:</strong> Some toolchains emit a <code>PT_MIPS_REGINFO</code> (<code>0x70000000</code>) or <code>PT_NULL</code> program header before or alongside <code>PT_LOAD</code>. Loaders must skip all entries where <code>p_type != 1</code> rather than mapping them into EE RAM.</li>
+            <li><strong><code>p_memsz &gt; p_filesz</code> BSS Expansion:</strong> When <code>p_memsz &gt; p_filesz</code>, the loader copies <code>p_filesz</code> bytes from <code>p_offset</code> to <code>p_vaddr</code> and zeroes the remaining <code>p_memsz - p_filesz</code> bytes. Reject segments where <code>p_memsz &lt; p_filesz</code> or <code>p_offset + p_filesz &gt; file_size</code>.</li>
+            <li><strong>Kernel Region Guard:</strong> User-space executables loaded by <code>EELOAD</code> must not overlap kernel memory below <code>0x00100000</code> (or exceed <code>0x02000000</code> on retail 32 MiB hardware).</li>
+            <li><strong>Cache Coherency Before Entry:</strong> Because the R5900 has separate non-coherent instruction and data caches, <code>LoadExecPS2</code> writes back the data cache (<code>FlushCache(0)</code>) and invalidates the instruction cache (<code>FlushCache(2)</code>) after copying <code>PT_LOAD</code> segments and before transferring control to <code>e_entry</code>.</li>
+            <li><strong>VU Microcode Sections:</strong> In unstripped ELFs, sections such as <code>.vutext</code> or <code>.vudata</code> hold VU0/VU1 microprograms; they reside inside regular <code>PT_LOAD</code> EE RAM segments and are DMA-transferred to VU memory by user code at runtime.</li>
+        </ul>
+    </section>
+
+    <section class="section" id="pseudocode">
+        <h2>5. Step-by-Step Loader Pseudocode</h2>
+        <pre><code>function load_ee_elf(buf, ee_ram_limit = 0x02000000):
+    if len(buf) &lt; 0x34:
+        error("File smaller than Elf32_Ehdr")
+
+    # 1. Validate ELF32 little-endian MIPS header
+    if buf[0x00..0x04] != b"\x7FELF":
+        error("Invalid ELF magic")
+    if buf[0x04] != 1 or buf[0x05] != 1 or buf[0x06] != 1:
+        error("Expected ELFCLASS32, ELFDATA2LSB, EV_CURRENT")
+
+    e_type      = u16le(buf, 0x10)
+    e_machine   = u16le(buf, 0x12)
+    e_entry     = u32le(buf, 0x18)
+    e_phoff     = u32le(buf, 0x1C)
+    e_shoff     = u32le(buf, 0x20)
+    e_flags     = u32le(buf, 0x24)
+    e_phentsize = u16le(buf, 0x2A)
+    e_phnum     = u16le(buf, 0x2C)
+
+    if e_type != 2 or e_machine != 8:
+        error("Expected ET_EXEC (2) and EM_MIPS (8)")
+    if (e_flags &amp; 0x00FF0000) != 0x00920000:
+        warn("EF_MIPS_MACH_5900 (0x00920000) not set in e_flags")
+    if e_phnum == 0 or e_phentsize &lt; 0x20:
+        error("Missing or invalid program header table")
+    if e_phoff + e_phnum * e_phentsize &gt; len(buf):
+        error("Program header table out of bounds")
+
+    # 2. Map all PT_LOAD segments into EE memory image
+    segments = []
+    for i in 0 .. e_phnum - 1:
+        off = e_phoff + i * e_phentsize
+        p_type   = u32le(buf, off + 0x00)
+        p_offset = u32le(buf, off + 0x04)
+        p_vaddr  = u32le(buf, off + 0x08)
+        p_paddr  = u32le(buf, off + 0x0C)
+        p_filesz = u32le(buf, off + 0x10)
+        p_memsz  = u32le(buf, off + 0x14)
+        p_flags  = u32le(buf, off + 0x18)
+        p_align  = u32le(buf, off + 0x1C)
+
+        if p_type != 1:  # skip PT_MIPS_REGINFO, PT_NULL, etc.
+            continue
+        if p_memsz &lt; p_filesz or p_offset + p_filesz &gt; len(buf):
+            error("Invalid PT_LOAD segment bounds")
+        if p_vaddr &lt; 0x00100000 or p_vaddr + p_memsz &gt; ee_ram_limit:
+            error("Segment outside user EE RAM bounds")
+
+        mem_copy(dst=p_vaddr, src=buf[p_offset .. p_offset + p_filesz])
+        if p_memsz &gt; p_filesz:
+            mem_zero(dst=p_vaddr + p_filesz, size=p_memsz - p_filesz)
+        segments.append({ "vaddr": p_vaddr, "memsz": p_memsz, "flags": p_flags })
+
+    # 3. Flush EE data cache and invalidate instruction cache before jump
+    flush_dcache()
+    invalidate_icache()
+    return { "entry": e_entry, "segments": segments, "stripped": (e_shoff == 0) }</code></pre>
+    </section>
+
+    <section class="section" id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>
+            <span class="badge confidence-confirmed">Confirmed Spec</span>
+            <span class="badge confidence-revision">SDK-Revision-Dependent</span>
+        </p>
+        <ul>
+            <li><strong>Confirmed Spec:</strong> ELF32 header, program header, and section header layouts are governed by the System V ELF specification; MIPS <code>e_flags</code> and <code>Elf32_RegInfo</code> constants match GNU binutils MIPS/R5900 definitions; EE user-space virtual memory bounds and <code>LoadExecPS2</code>/<code>EELOAD</code> segment mapping are confirmed across PS2 hardware and SDK binaries.</li>
+            <li><strong>SDK-Revision-Dependent:</strong> Specific combinations of <code>EF_MIPS_ARCH_*</code>, <code>E_MIPS_ABI_EABI64</code>, <code>PT_MIPS_REGINFO</code> emission, and segment alignment vary slightly between <code>ee-gcc</code> versions and third-party commercial compilers.</li>
+        </ul>
+        <aside class="callout-warn">
+            <p><strong>Loader Note:</strong> Development executables built for 128 MiB TOOL kits may link debug symbols or heap tables above <code>0x02000000</code>; parsers targeting retail discs should enforce the 32 MiB boundary while allowing an optional override for development dumps.</p>
+        </aside>
+    </section>
+</body>
+</html>

@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nintendo DS Cartridge ROM (.nds / .srl) &amp; NitroFS — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#nds" target="_top">Nintendo DS</a><span>/</span><span>Cartridge ROM &amp; NitroFS</span>
+    </nav>
+
+    <h1>Nintendo DS Cartridge ROM (<code>.nds</code> / <code>.srl</code>) &amp; NitroFS</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Platform Binary Specification · Boot Image &amp; Filesystem</p>
+        <p>The Nintendo DS cartridge image stores the boot header, ARM9 and ARM7 static executables, overlay tables, icon/title banner, and the NitroFS File Allocation Table (FAT) and File Name Table (FNT). Both retail dumps and Nitro SDK <em>Shared ROM</em> (<code>.srl</code>) build outputs share this layout.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.nds</code> (retail/dumped cartridge image), <code>*.srl</code> (Nitro SDK Shared ROM output)</dd>
+            <dt>Magic Bytes</dt>
+            <dd>No fixed 4-byte file signature; verified structurally via compressed Nintendo Logo at <code>0x00C0</code> (Logo CRC-16 <code>0xCF56</code> at <code>0x015C</code>) and Header CRC-16 at <code>0x015E</code></dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (<code>u16le</code>, <code>u32le</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo DS (NTR) Slot-1 cartridges; extended 4 KiB header on Nintendo DSi (TWL) hybrid/exclusive cartridges</dd>
+            <dt>Role/MIME</dt>
+            <dd>Bootable ROM image &amp; read-only flat/hierarchical filesystem (<code>application/x-nintendo-ds-rom</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">Identification &amp; Scope</a></li>
+            <li><a href="#layout">Binary Layout Tables</a></li>
+            <li><a href="#flags">Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">Parser Pseudocode</a></li>
+            <li><a href="#provenance">Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Unlike container formats with a leading FourCC magic word, a Nintendo DS ROM begins immediately at <code>0x0000</code> with an ASCII game title. Parsers identify a valid <code>.nds</code> / <code>.srl</code> image by validating structural invariants across the first <code>0x200</code> bytes:</p>
+        <ul>
+            <li><strong>Header Checksum:</strong> Computing CRC-16/MODBUS over bytes <code>0x0000–0x015D</code> must match the <code>u16le</code> value at <code>0x015E</code>.</li>
+            <li><strong>Nintendo Logo &amp; Logo CRC:</strong> Bytes <code>0x00C0–0x015B</code> (156 bytes) contain the 1-bit Huffman/LZ-packed Nintendo logo bitmap beginning with <code>24 FF AE 51 69 9A A2 21</code>; its CRC-16/MODBUS must equal the <code>u16le</code> at <code>0x015C</code> (<code>0xCF56</code> on official builds).</li>
+            <li><strong>Segment Bounds:</strong> ARM9, ARM7, FNT, FAT, overlay tables, and banner offsets/sizes must fall within the total ROM length (and for NTR images, <code>arm9_rom_offset &gt;= 0x4000</code>).</li>
+        </ul>
+        <p>All multi-byte integers in the header, FAT, and FNT are stored in <strong>little-endian</strong> byte order.</p>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>NTR Cartridge Header (0x0000–0x01FF, 512 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x0000</td><td>12</td><td>char[12]</td><td>game_title</td><td>Uppercase ASCII short title, padded with <code>0x00</code>.</td></tr>
+                    <tr><td>0x000C</td><td>4</td><td>char[4]</td><td>game_code</td><td>4-character product code (e.g. type + short ID + region).</td></tr>
+                    <tr><td>0x0010</td><td>2</td><td>char[2]</td><td>maker_code</td><td>2-character ASCII licensee/publisher code.</td></tr>
+                    <tr><td>0x0012</td><td>1</td><td>u8</td><td>unit_code</td><td>Target hardware: <code>0x00</code> NDS, <code>0x02</code> NDS+DSi, <code>0x03</code> DSi-only.</td></tr>
+                    <tr><td>0x0013</td><td>1</td><td>u8</td><td>encryption_seed_select</td><td>Blowfish KEY1 key-table index (<code>0x00–0x07</code>).</td></tr>
+                    <tr><td>0x0014</td><td>1</td><td>u8</td><td>device_capacity</td><td>Chip size exponent: <code>128 KiB &lt;&lt; device_capacity</code>.</td></tr>
+                    <tr><td>0x0015</td><td>7</td><td>u8[7]</td><td>reserved_0</td><td>Reserved, zero-filled in standard NTR headers.</td></tr>
+                    <tr><td>0x001C</td><td>1</td><td>u8</td><td>reserved_dsi_flags</td><td>Zero on NTR; DSi system flags when <code>unit_code</code> has bit 1 set.</td></tr>
+                    <tr><td>0x001D</td><td>1</td><td>u8</td><td>nds_region</td><td>Region lock indicator (<code>0x00</code> Normal, <code>0x40</code> Korea, <code>0x80</code> China).</td></tr>
+                    <tr><td>0x001E</td><td>1</td><td>u8</td><td>rom_version</td><td>Software revision number (<code>0x00</code> = v1.0).</td></tr>
+                    <tr><td>0x001F</td><td>1</td><td>u8</td><td>internal_flags</td><td>Bit 2 (<code>0x04</code>): auto-boot / skip Health &amp; Safety screen.</td></tr>
+                    <tr><td>0x0020</td><td>4</td><td>u32le</td><td>arm9_rom_offset</td><td>ROM byte offset of static ARM9 binary (typically <code>0x00004000</code>).</td></tr>
+                    <tr><td>0x0024</td><td>4</td><td>u32le</td><td>arm9_entry_address</td><td>Initial ARM9 PC entry point in Main RAM.</td></tr>
+                    <tr><td>0x0028</td><td>4</td><td>u32le</td><td>arm9_ram_address</td><td>Destination load address for ARM9 static binary.</td></tr>
+                    <tr><td>0x002C</td><td>4</td><td>u32le</td><td>arm9_size</td><td>Byte size of static ARM9 binary in ROM.</td></tr>
+                    <tr><td>0x0030</td><td>4</td><td>u32le</td><td>arm7_rom_offset</td><td>ROM byte offset of static ARM7 binary.</td></tr>
+                    <tr><td>0x0034</td><td>4</td><td>u32le</td><td>arm7_entry_address</td><td>Initial ARM7 PC entry point.</td></tr>
+                    <tr><td>0x0038</td><td>4</td><td>u32le</td><td>arm7_ram_address</td><td>Destination load address for ARM7 static binary.</td></tr>
+                    <tr><td>0x003C</td><td>4</td><td>u32le</td><td>arm7_size</td><td>Byte size of static ARM7 binary in ROM.</td></tr>
+                    <tr><td>0x0040</td><td>4</td><td>u32le</td><td>fnt_offset</td><td>ROM byte offset of NitroFS File Name Table (FNT).</td></tr>
+                    <tr><td>0x0044</td><td>4</td><td>u32le</td><td>fnt_size</td><td>Byte size of FNT region.</td></tr>
+                    <tr><td>0x0048</td><td>4</td><td>u32le</td><td>fat_offset</td><td>ROM byte offset of NitroFS File Allocation Table (FAT).</td></tr>
+                    <tr><td>0x004C</td><td>4</td><td>u32le</td><td>fat_size</td><td>Byte size of FAT region (<code>8 * total_files</code>).</td></tr>
+                    <tr><td>0x0050</td><td>4</td><td>u32le</td><td>arm9_overlay_offset</td><td>ROM offset of <code>y9.bin</code> overlay table (<code>0</code> if absent).</td></tr>
+                    <tr><td>0x0054</td><td>4</td><td>u32le</td><td>arm9_overlay_size</td><td>Byte size of ARM9 overlay table (<code>32 * count</code>).</td></tr>
+                    <tr><td>0x0058</td><td>4</td><td>u32le</td><td>arm7_overlay_offset</td><td>ROM offset of <code>y7.bin</code> overlay table (<code>0</code> if absent).</td></tr>
+                    <tr><td>0x005C</td><td>4</td><td>u32le</td><td>arm7_overlay_size</td><td>Byte size of ARM7 overlay table (<code>32 * count</code>).</td></tr>
+                    <tr><td>0x0060</td><td>4</td><td>u32le</td><td>normal_card_ctrl</td><td><code>REG_ROMCTRL</code> value used for normal unencrypted reads.</td></tr>
+                    <tr><td>0x0064</td><td>4</td><td>u32le</td><td>secure_card_ctrl</td><td><code>REG_ROMCTRL</code> value used for KEY1/secure area reads.</td></tr>
+                    <tr><td>0x0068</td><td>4</td><td>u32le</td><td>banner_offset</td><td>ROM offset of Icon/Title banner structure (<code>0</code> if absent).</td></tr>
+                    <tr><td>0x006C</td><td>2</td><td>u16le</td><td>secure_area_crc16</td><td>CRC-16/MODBUS of Secure Area (<code>0x4000–0x7FFF</code>).</td></tr>
+                    <tr><td>0x006E</td><td>2</td><td>u16le</td><td>secure_transfer_timeout</td><td>KEY1 secure transfer delay in 131.072 kHz ticks.</td></tr>
+                    <tr><td>0x0070</td><td>4</td><td>u32le</td><td>arm9_autoload_hook</td><td>ARM9 auto-load list hook RAM address.</td></tr>
+                    <tr><td>0x0074</td><td>4</td><td>u32le</td><td>arm7_autoload_hook</td><td>ARM7 auto-load list hook RAM address.</td></tr>
+                    <tr><td>0x0078</td><td>8</td><td>u8[8]</td><td>secure_area_disable</td><td>Secure area disable key (zero on retail cards).</td></tr>
+                    <tr><td>0x0080</td><td>4</td><td>u32le</td><td>ntr_rom_size</td><td>Total used NTR ROM byte length (excluding chip padding).</td></tr>
+                    <tr><td>0x0084</td><td>4</td><td>u32le</td><td>header_size</td><td>ROM header area size (typically <code>0x00004000</code> on NTR).</td></tr>
+                    <tr><td>0x0088</td><td>56</td><td>u8[56]</td><td>reserved_1</td><td>Reserved / SDK parameter area (usually zero-filled on NTR).</td></tr>
+                    <tr><td>0x00C0</td><td>156</td><td>u8[156]</td><td>nintendo_logo</td><td>Compressed 1-bit Nintendo boot logo bitmap.</td></tr>
+                    <tr><td>0x015C</td><td>2</td><td>u16le</td><td>nintendo_logo_crc16</td><td>CRC-16/MODBUS over <code>0x00C0–0x015B</code> (<code>0xCF56</code>).</td></tr>
+                    <tr><td>0x015E</td><td>2</td><td>u16le</td><td>header_crc16</td><td>CRC-16/MODBUS over <code>0x0000–0x015D</code>.</td></tr>
+                    <tr><td>0x0160</td><td>4</td><td>u32le</td><td>debug_rom_offset</td><td>Debugger monitor ROM offset (<code>0</code> on retail).</td></tr>
+                    <tr><td>0x0164</td><td>4</td><td>u32le</td><td>debug_size</td><td>Debugger monitor byte size (<code>0</code> on retail).</td></tr>
+                    <tr><td>0x0168</td><td>4</td><td>u32le</td><td>debug_ram_address</td><td>Debugger monitor RAM load address (<code>0</code> on retail).</td></tr>
+                    <tr><td>0x016C</td><td>4</td><td>u32le</td><td>reserved_2</td><td>Reserved (zero).</td></tr>
+                    <tr><td>0x0170</td><td>144</td><td>u8[144]</td><td>reserved_or_twl_tail</td><td>Zero on NTR; holds TWL configuration fields from <code>0x0180</code> on DSi.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>TWL / DSi Extended Header Subset (0x0180–0x0FFF, when unit_code &amp; 0x02)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x0180</td><td>48</td><td>u8[48]</td><td>mbk_wram_settings</td><td>Global MBK1–MBK5, ARM9/ARM7 WRAM slot mappings, and MBK9 lock bits.</td></tr>
+                    <tr><td>0x01B0</td><td>4</td><td>u32le</td><td>twl_region_flags</td><td>DSi region bitmask (<code>0xFFFFFFFF</code> = region-free).</td></tr>
+                    <tr><td>0x01B4</td><td>4</td><td>u32le</td><td>access_control</td><td>DSi hardware/filesystem permission bitmask.</td></tr>
+                    <tr><td>0x01B8</td><td>4</td><td>u32le</td><td>arm7_scfg_ext_mask</td><td>ARM7 extended system control mask.</td></tr>
+                    <tr><td>0x01BC</td><td>4</td><td>u8[4]</td><td>twl_app_flags</td><td>DSi application flags (<code>0x01BF</code>: codec/icon/EULA/card flags).</td></tr>
+                    <tr><td>0x01C0</td><td>4</td><td>u32le</td><td>arm9i_rom_offset</td><td>ROM offset of DSi-extended ARM9i binary.</td></tr>
+                    <tr><td>0x01C4</td><td>4</td><td>u32le</td><td>reserved_arm9i</td><td>Reserved (zero).</td></tr>
+                    <tr><td>0x01C8</td><td>4</td><td>u32le</td><td>arm9i_ram_address</td><td>RAM load address for ARM9i binary.</td></tr>
+                    <tr><td>0x01CC</td><td>4</td><td>u32le</td><td>arm9i_size</td><td>Byte size of ARM9i binary.</td></tr>
+                    <tr><td>0x01D0</td><td>4</td><td>u32le</td><td>arm7i_rom_offset</td><td>ROM offset of DSi-extended ARM7i binary.</td></tr>
+                    <tr><td>0x01D4</td><td>4</td><td>u32le</td><td>reserved_arm7i</td><td>Reserved (zero).</td></tr>
+                    <tr><td>0x01D8</td><td>4</td><td>u32le</td><td>arm7i_ram_address</td><td>RAM load address for ARM7i binary.</td></tr>
+                    <tr><td>0x01DC</td><td>4</td><td>u32le</td><td>arm7i_size</td><td>Byte size of ARM7i binary.</td></tr>
+                    <tr><td>0x01E0</td><td>32</td><td>u8[32]</td><td>digest_and_modcrypt_meta</td><td>NTR/TWL digest region offsets/sizes and Modcrypt area descriptors.</td></tr>
+                    <tr><td>0x0200</td><td>3584</td><td>u8[3584]</td><td>twl_ext_metadata_sig</td><td>TWL sizes, Title ID, save sizes, SHA-1 HMAC digests, and RSA signature block (up to <code>0x0FFF</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>NitroFS File Allocation Table (FAT) Entry (8 bytes per file_id)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>4</td><td>u32le</td><td>start_offset</td><td>Absolute ROM byte offset where file data begins.</td></tr>
+                    <tr><td>0x04</td><td>4</td><td>u32le</td><td>end_offset</td><td>Absolute ROM byte offset immediately after file data (exclusive).</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>NitroFS File Name Table (FNT) Directory Record (8 bytes per directory)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>4</td><td>u32le</td><td>subtable_offset</td><td>Byte offset of this directory's entry sub-table relative to <code>fnt_offset</code>.</td></tr>
+                    <tr><td>0x04</td><td>2</td><td>u16le</td><td>first_file_id</td><td>FAT index assigned to the first file entry in this directory's sub-table.</td></tr>
+                    <tr><td>0x06</td><td>2</td><td>u16le</td><td>parent_or_dir_count</td><td>For root directory (ID <code>0xF000</code>): total directory count (including root). For IDs <code>0xF001–0xFFFF</code>: parent directory ID.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>NitroFS FNT Sub-Table Variable Entry</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>1</td><td>u8</td><td>type_len</td><td><code>0x00</code> = end of sub-table; <code>0x01–0x7F</code> = file name length; <code>0x81–0xFF</code> = directory flag (bit 7) + name length (bits 0–6).</td></tr>
+                    <tr><td>0x01</td><td>N</td><td>char[N]</td><td>name</td><td><code>N = type_len &amp; 0x7F</code> non-null-terminated filename bytes (ASCII / Shift-JIS).</td></tr>
+                    <tr><td>0x01+N</td><td>2 (dir only)</td><td>u16le</td><td>subdir_id</td><td>Present only when <code>type_len &amp; 0x80</code> is set; directory ID in range <code>0xF001–0xFFFF</code>.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>CRC-16/MODBUS Checksum</h3>
+        <p>All NDS header and banner checksums use reflected CRC-16/MODBUS (polynomial <code>0xA001</code>, initial value <code>0xFFFF</code>, no final XOR):</p>
+        <pre><code>crc = 0xFFFF
+for byte in data:
+    crc ^= byte
+    for _ in range(8):
+        if crc &amp; 1:
+            crc = (crc &gt;&gt; 1) ^ 0xA001
+        else:
+            crc &gt;&gt;= 1</code></pre>
+
+        <h3>FNT Directory &amp; File ID Decoding</h3>
+        <ul>
+            <li><strong>Directory Index Conversion:</strong> Directory IDs range from <code>0xF000</code> (root) up to <code>0xF000 + total_dir_count - 1</code>. The 0-based index into the FNT main directory table is <code>dir_index = dir_id &amp; 0x0FFF</code>, located at byte offset <code>fnt_offset + (dir_index * 8)</code>.</li>
+            <li><strong>Sequential File ID Assignment:</strong> File entries inside a directory sub-table do not store an explicit file ID. Instead, initialize <code>file_id = dir_record.first_file_id</code> when entering a directory sub-table, assign <code>file_id</code> to each file entry (<code>0x01 &lt;= type_len &lt;= 0x7F</code>), and increment <code>file_id += 1</code>.</li>
+            <li><strong>FAT Size Derivation:</strong> For any valid <code>file_id</code>, <code>file_size = fat[file_id].end_offset - fat[file_id].start_offset</code>. Note that overlay files referenced by <code>y9.bin</code> / <code>y7.bin</code> occupy low FAT indices (often starting at <code>0</code>) and may have no FNT name entry.</li>
+        </ul>
+
+        <h3>Device Capacity</h3>
+        <p>The nominal ROM capacity in bytes is <code>131072 &lt;&lt; device_capacity</code> (e.g., <code>0x07</code> = 16 MiB, <code>0x09</code> = 64 MiB). Used content extends only up to <code>ntr_rom_size</code> (<code>0x0080</code>).</p>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Secure Area Blowfish Encryption (<code>0x4000–0x7FFF</code>):</strong> Retail cartridges store the first <code>0x800</code> bytes of the Secure Area (<code>0x4000–0x47FF</code>) encrypted with Blowfish KEY1 (derived from <code>game_code</code> and BIOS key tables), with the decrypted first 8 bytes containing the marker <code>"encryObj"</code> (<code>65 6E 63 72 79 4F 62 6A</code>). Decrypted clean dumps and SDK <code>.srl</code> images often hold plaintext or cleared bytes in <code>0x4000–0x47FF</code>; consequently, <code>secure_area_crc16</code> at <code>0x006C</code> reflects a specific state depending on whether the dump was encrypted or decrypted.</li>
+            <li><strong>DSi Extended Header Detection:</strong> Only inspect <code>0x0180–0x0FFF</code> when <code>(unit_code &amp; 0x02) != 0</code> and <code>header_size &gt;= 0x1000</code> (or <code>arm9i_rom_offset != 0</code>). Plain NTR ROMs leave <code>0x0170–0x3FFF</code> zero-filled (or <code>0xFF</code>-padded after <code>0x0200</code>).</li>
+            <li><strong>FNT Recursive Tree Bounds:</strong> Protect tree traversal against malformed or cyclic directory IDs: verify <code>dir_index &lt; total_dir_count</code>, reject <code>type_len == 0x80</code> (zero-length directory name), track visited directory IDs to prevent loops, and ensure <code>subtable_offset</code> stays within <code>[total_dir_count * 8, fnt_size)</code>.</li>
+            <li><strong>Generalized ARM9/ARM7 Loader Mapping:</strong> A clean-room loader reads <code>arm9_size</code> bytes from <code>arm9_rom_offset</code> into <code>arm9_ram_address</code> and <code>arm7_size</code> bytes from <code>arm7_rom_offset</code> into <code>arm7_ram_address</code>, then transfers control to <code>arm9_entry_address</code> and <code>arm7_entry_address</code>. If <code>arm9_rom_offset == 0x4000</code>, bytes <code>0x4000–0x47FF</code> belong to the Secure Area prefix of the ARM9 binary.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Parser Pseudocode</h2>
+        <pre><code>function parse_nds_rom(rom_bytes):
+    assert len(rom_bytes) &gt;= 0x200
+
+    # 1. Validate checksums
+    expected_hdr_crc = read_u16le(rom_bytes, 0x015E)
+    actual_hdr_crc   = crc16_modbus(rom_bytes[0x0000 : 0x015E])
+    assert actual_hdr_crc == expected_hdr_crc
+
+    expected_logo_crc = read_u16le(rom_bytes, 0x015C)
+    actual_logo_crc   = crc16_modbus(rom_bytes[0x00C0 : 0x015C])
+    assert actual_logo_crc == expected_logo_crc
+
+    # 2. Read core header fields
+    hdr = {
+        title:           trim_null(rom_bytes[0x0000 : 0x000C]),
+        game_code:       ascii(rom_bytes[0x000C : 0x0010]),
+        maker_code:      ascii(rom_bytes[0x0010 : 0x0012]),
+        unit_code:       rom_bytes[0x0012],
+        arm9_rom_offset: read_u32le(rom_bytes, 0x0020),
+        arm9_entry:      read_u32le(rom_bytes, 0x0024),
+        arm9_ram_addr:   read_u32le(rom_bytes, 0x0028),
+        arm9_size:       read_u32le(rom_bytes, 0x002C),
+        arm7_rom_offset: read_u32le(rom_bytes, 0x0030),
+        arm7_entry:      read_u32le(rom_bytes, 0x0034),
+        arm7_ram_addr:   read_u32le(rom_bytes, 0x0038),
+        arm7_size:       read_u32le(rom_bytes, 0x003C),
+        fnt_offset:      read_u32le(rom_bytes, 0x0040),
+        fnt_size:        read_u32le(rom_bytes, 0x0044),
+        fat_offset:      read_u32le(rom_bytes, 0x0048),
+        fat_size:        read_u32le(rom_bytes, 0x004C),
+        ov9_offset:      read_u32le(rom_bytes, 0x0050),
+        ov9_size:        read_u32le(rom_bytes, 0x0054),
+        ov7_offset:      read_u32le(rom_bytes, 0x0058),
+        ov7_size:        read_u32le(rom_bytes, 0x005C),
+        banner_offset:   read_u32le(rom_bytes, 0x0068),
+        header_size:     read_u32le(rom_bytes, 0x0084),
+    }
+
+    # 3. Parse FAT (File Allocation Table)
+    assert hdr.fat_size % 8 == 0
+    file_count = hdr.fat_size // 8
+    fat = []
+    for i in range(file_count):
+        base = hdr.fat_offset + i * 8
+        start_off = read_u32le(rom_bytes, base + 0)
+        end_off   = read_u32le(rom_bytes, base + 4)
+        assert start_off &lt;= end_off &lt;= len(rom_bytes)
+        fat.append({ file_id: i, start: start_off, end: end_off })
+
+    # 4. Parse FNT (File Name Table) starting at root (0xF000)
+    fnt = rom_bytes[hdr.fnt_offset : hdr.fnt_offset + hdr.fnt_size]
+    total_dirs = read_u16le(fnt, 0x06)
+    visited = set()
+    files = {}
+
+    function walk_dir(dir_id, current_path):
+        assert dir_id not in visited
+        visited.add(dir_id)
+        dir_idx = dir_id &amp; 0x0FFF
+        assert dir_idx &lt; total_dirs
+
+        rec_off       = dir_idx * 8
+        sub_off       = read_u32le(fnt, rec_off + 0)
+        next_file_id  = read_u16le(fnt, rec_off + 4)
+        assert sub_off &lt; len(fnt)
+
+        pos = sub_off
+        while pos &lt; len(fnt):
+            type_len = fnt[pos]
+            pos += 1
+            if type_len == 0x00:
+                break
+            name_len = type_len &amp; 0x7F
+            assert name_len &gt; 0 and pos + name_len &lt;= len(fnt)
+            name = decode_name(fnt[pos : pos + name_len])
+            pos += name_len
+
+            if (type_len &amp; 0x80) != 0:
+                subdir_id = read_u16le(fnt, pos)
+                pos += 2
+                walk_dir(subdir_id, current_path + "/" + name)
+            else:
+                assert next_file_id &lt; file_count
+                files[current_path + "/" + name] = fat[next_file_id]
+                next_file_id += 1
+
+    walk_dir(0xF000, "")
+    return { header: hdr, fat: fat, files: files }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>The NTR header (<code>0x0000–0x01FF</code>), CRC-16/MODBUS checksums, FAT entry layout, and FNT directory tree encoding are <strong>confirmed</strong> against Nintendo DS hardware boot behavior and standard Nitro SDK ROM builders.</p>
+        <aside class="callout-warn">
+            <strong>Caveats on DSi &amp; Secure Area Fields:</strong> Fields in the TWL extended region (<code>0x0180–0x0FFF</code>) are documented at structural summary level for <code>0x01E0–0x0FFF</code> because individual Modcrypt, SHA-1 HMAC digest regions, and RSA signature offsets vary across DSi system revisions and cartridge/DSiWare types. Similarly, Blowfish KEY1 key tables reside in internal NDS BIOS ROM and are omitted from this specification; parsers inspecting raw retail dumps should check whether <code>0x4000–0x47FF</code> holds encrypted data or a decrypted <code>"encryObj"</code>/plaintext header.
+        </aside>
+    </section>
+</body>
+</html>

@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Xbox Executable (.xbe) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#xbox" target="_top">Original Xbox</a><span>/</span><span>Xbox Executable (.xbe)</span>
+    </nav>
+
+    <div class="doc-overview">
+        <h1>Xbox Executable (<code>.xbe</code>)</h1>
+
+        <section class="format-summary">
+            <p class="eyebrow">Original Xbox &middot; Platform Executable Format</p>
+            <p>
+                Native executable format for the Original Xbox kernel (<code>xboxkrnl.exe</code>). Replaced standard
+                Win32 PE/COFF headers with a flat <code>XBEH</code> image header, an RSA-2048 signed digest over header
+                and section hashes, XOR-obfuscated entry and kernel thunk addresses, and statically linked XDK library
+                version descriptors.
+            </p>
+            <dl>
+                <dt>Canonical Filenames</dt>
+                <dd><code>default.xbe</code>, <code>*.xbe</code> (e.g., <code>xboxdash.xbe</code>, <code>dashupdate.xbe</code>)</dd>
+                <dt>Magic Bytes</dt>
+                <dd><code>58 42 45 48</code> (ASCII <code>XBEH</code>, <code>0x48454258</code> as <code>u32le</code>)</dd>
+                <dt>Endianness</dt>
+                <dd>Little-endian (x86 IA-32)</dd>
+                <dt>Platform / OS Scope</dt>
+                <dd>Original Xbox retail &amp; XDK debug kernels; Sega Chihiro (Xbox-derived arcade board)</dd>
+                <dt>Role / MIME</dt>
+                <dd>Kernel-loaded executable image (<code>application/x-xbox-xbe</code>)</dd>
+            </dl>
+        </section>
+
+        <nav class="page-toc" aria-label="On this page">
+            <ul>
+                <li><a href="#identification">1. Identification &amp; Scope</a></li>
+                <li><a href="#layout">2. Binary Layout Tables</a></li>
+                <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+                <li><a href="#edge-cases">4. Edge Cases &amp; Loader Rules</a></li>
+                <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+                <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+            </ul>
+        </nav>
+
+        <section class="section" id="identification">
+            <h2>1. Identification &amp; Scope</h2>
+            <p>
+                Every Original Xbox disc boots from <code>default.xbe</code> in the root of the XDVDFS partition
+                (or an explicit XBE launched via <code>XLaunchNewImage</code>). Although produced by the XDK linker
+                from a PE/COFF intermediate image (and preserving several diagnostic PE fields such as
+                <code>PeStackCommit</code> and <code>PeHeapReserve</code>), the on-disk XBE removes the DOS MZ and PE
+                headers entirely.
+            </p>
+            <ul>
+                <li><strong>Magic:</strong> Offset <code>0x0000</code> contains the 4-byte ASCII signature <code>XBEH</code> (<code>58 42 45 48</code>, <code>0x48454258</code> in <code>u32le</code>).</li>
+                <li><strong>Addressing Rule:</strong> Header pointers are 32-bit <em>Virtual Addresses</em> (VAs) anchored at <code>BaseAddress</code> (normally <code>0x00010000</code>). Header structures reside within the first <code>SizeOfHeaders</code> bytes mapped at <code>BaseAddress</code>, so a header-resident VA converts directly to file offset via <code>VA - BaseAddress</code>.</li>
+                <li><strong>Endianness:</strong> All integer fields, pointers, and UTF-16LE strings are little-endian.</li>
+            </ul>
+        </section>
+
+        <section class="section" id="layout">
+            <h2>2. Binary Layout Tables</h2>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>XBE Image Header (<code>0x0000</code> &ndash; <code>0x0177</code>, <code>SizeOfImageHeader &ge; 0x178</code>)</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>4</td><td><code>u8[4]</code></td><td><code>Magic</code></td><td>ASCII <code>XBEH</code> (<code>0x48454258</code> as <code>u32le</code>).</td></tr>
+                        <tr><td><code>0x0004</code></td><td>256</td><td><code>u8[256]</code></td><td><code>DigitalSignature</code></td><td>RSA-2048 signature over the SHA-1 digest of bytes <code>[0x0104, SizeOfHeaders)</code>.</td></tr>
+                        <tr><td><code>0x0104</code></td><td>4</td><td><code>u32le</code></td><td><code>BaseAddress</code></td><td>Preferred virtual load address of the image (typically <code>0x00010000</code>). SHA-1 header hash starts here.</td></tr>
+                        <tr><td><code>0x0108</code></td><td>4</td><td><code>u32le</code></td><td><code>SizeOfHeaders</code></td><td>Total byte size of all headers mapped at <code>BaseAddress</code> (including cert, section headers, and library versions).</td></tr>
+                        <tr><td><code>0x010C</code></td><td>4</td><td><code>u32le</code></td><td><code>SizeOfImage</code></td><td>Total virtual memory footprint of the loaded image in bytes.</td></tr>
+                        <tr><td><code>0x0110</code></td><td>4</td><td><code>u32le</code></td><td><code>SizeOfImageHeader</code></td><td>Byte size of this header structure (<code>0x0178</code> baseline; <code>0x017C</code>&ndash;<code>0x0184</code> in newer XDKs).</td></tr>
+                        <tr><td><code>0x0114</code></td><td>4</td><td><code>u32le</code></td><td><code>TimeDate</code></td><td>Build timestamp (32-bit Unix epoch seconds).</td></tr>
+                        <tr><td><code>0x0118</code></td><td>4</td><td><code>u32le</code></td><td><code>CertificateAddress</code></td><td>Virtual address of the <code>XBE_CERTIFICATE</code> structure.</td></tr>
+                        <tr><td><code>0x011C</code></td><td>4</td><td><code>u32le</code></td><td><code>NumberOfSections</code></td><td>Count of 56-byte <code>XBE_SECTION_HEADER</code> entries.</td></tr>
+                        <tr><td><code>0x0120</code></td><td>4</td><td><code>u32le</code></td><td><code>SectionHeadersAddress</code></td><td>Virtual address of the <code>XBE_SECTION_HEADER</code> array.</td></tr>
+                        <tr><td><code>0x0124</code></td><td>4</td><td><code>u32le</code></td><td><code>InitFlags</code></td><td>Kernel initialization flags bitmask (utility drive, 64 MB cap).</td></tr>
+                        <tr><td><code>0x0128</code></td><td>4</td><td><code>u32le</code></td><td><code>EntryPoint</code></td><td>XOR-encoded virtual address of the executable entry point.</td></tr>
+                        <tr><td><code>0x012C</code></td><td>4</td><td><code>u32le</code></td><td><code>TLSAddress</code></td><td>Virtual address of the <code>XBE_TLS</code> directory (<code>0</code> if unused).</td></tr>
+                        <tr><td><code>0x0130</code></td><td>4</td><td><code>u32le</code></td><td><code>PeStackCommit</code></td><td>Default main-thread stack commit size from linked PE image.</td></tr>
+                        <tr><td><code>0x0134</code></td><td>4</td><td><code>u32le</code></td><td><code>PeHeapReserve</code></td><td>Default process heap reserve size from linked PE image.</td></tr>
+                        <tr><td><code>0x0138</code></td><td>4</td><td><code>u32le</code></td><td><code>PeHeapCommit</code></td><td>Default process heap commit size from linked PE image.</td></tr>
+                        <tr><td><code>0x013C</code></td><td>4</td><td><code>u32le</code></td><td><code>PeBaseAddress</code></td><td>Original linker PE base address prior to XBE conversion.</td></tr>
+                        <tr><td><code>0x0140</code></td><td>4</td><td><code>u32le</code></td><td><code>PeSizeOfImage</code></td><td>Original linker PE image size.</td></tr>
+                        <tr><td><code>0x0144</code></td><td>4</td><td><code>u32le</code></td><td><code>PeChecksum</code></td><td>Original linker PE checksum.</td></tr>
+                        <tr><td><code>0x0148</code></td><td>4</td><td><code>u32le</code></td><td><code>PeTimeDate</code></td><td>Original linker PE timestamp.</td></tr>
+                        <tr><td><code>0x014C</code></td><td>4</td><td><code>u32le</code></td><td><code>DebugPathNameAddress</code></td><td>VA of NUL-terminated ASCII original PDB/EXE build path string.</td></tr>
+                        <tr><td><code>0x0150</code></td><td>4</td><td><code>u32le</code></td><td><code>DebugFileNameAddress</code></td><td>VA of NUL-terminated ASCII filename string (usually points into <code>DebugPathName</code>).</td></tr>
+                        <tr><td><code>0x0154</code></td><td>4</td><td><code>u32le</code></td><td><code>DebugUnicodeFileNameAddress</code></td><td>VA of NUL-terminated UTF-16LE filename string.</td></tr>
+                        <tr><td><code>0x0158</code></td><td>4</td><td><code>u32le</code></td><td><code>KernelImageThunkAddress</code></td><td>XOR-encoded virtual address of the <code>xboxkrnl.exe</code> ordinal thunk array.</td></tr>
+                        <tr><td><code>0x015C</code></td><td>4</td><td><code>u32le</code></td><td><code>NonKernelImportDirectoryAddress</code></td><td>VA of non-kernel import table (<code>0</code> on standard retail XBEs; debug kits may link external dev DLLs).</td></tr>
+                        <tr><td><code>0x0160</code></td><td>4</td><td><code>u32le</code></td><td><code>NumberOfLibraryVersions</code></td><td>Number of 16-byte <code>XBE_LIBRARY_VERSION</code> records.</td></tr>
+                        <tr><td><code>0x0164</code></td><td>4</td><td><code>u32le</code></td><td><code>LibraryVersionsAddress</code></td><td>VA of the <code>XBE_LIBRARY_VERSION</code> array.</td></tr>
+                        <tr><td><code>0x0168</code></td><td>4</td><td><code>u32le</code></td><td><code>KernelLibraryVersionAddress</code></td><td>VA of the <code>XBE_LIBRARY_VERSION</code> record for <code>XBOXKRNL</code> (or <code>0</code>).</td></tr>
+                        <tr><td><code>0x016C</code></td><td>4</td><td><code>u32le</code></td><td><code>XAPILibraryVersionAddress</code></td><td>VA of the <code>XBE_LIBRARY_VERSION</code> record for <code>XAPILIB</code> (or <code>0</code>).</td></tr>
+                        <tr><td><code>0x0170</code></td><td>4</td><td><code>u32le</code></td><td><code>LogoBitmapAddress</code></td><td>VA of the RLE-compressed 100&times;17 Microsoft startup logo bitmap.</td></tr>
+                        <tr><td><code>0x0174</code></td><td>4</td><td><code>u32le</code></td><td><code>LogoBitmapSize</code></td><td>Byte size of the compressed startup logo bitmap.</td></tr>
+                        <tr><td><code>0x0178</code></td><td>4</td><td><code>u32le</code></td><td><code>LibraryFeaturesAddress</code></td><td><em>Optional (<code>SizeOfImageHeader &ge; 0x180</code>):</em> VA of library feature descriptors.</td></tr>
+                        <tr><td><code>0x017C</code></td><td>4</td><td><code>u32le</code></td><td><code>NumberOfLibraryFeatures</code></td><td><em>Optional (<code>SizeOfImageHeader &ge; 0x180</code>):</em> Count of library feature descriptors.</td></tr>
+                        <tr><td><code>0x0180</code></td><td>4</td><td><code>u32le</code></td><td><code>DebugInfo</code></td><td><em>Optional (<code>SizeOfImageHeader &ge; 0x184</code>):</em> Debug / extra header pointer (XDK-revision-dependent).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>XBE Certificate (at <code>CertificateAddress</code>, <code>0x01D0</code>+ bytes)</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>4</td><td><code>u32le</code></td><td><code>Size</code></td><td>Byte size of certificate (<code>0x01D0</code> baseline; <code>0x01DC</code> / <code>0x01EC</code>+ in later XDKs).</td></tr>
+                        <tr><td><code>0x0004</code></td><td>4</td><td><code>u32le</code></td><td><code>TimeDate</code></td><td>Certificate issuance timestamp (Unix epoch seconds).</td></tr>
+                        <tr><td><code>0x0008</code></td><td>4</td><td><code>u32le</code></td><td><code>TitleId</code></td><td>32-bit Title ID (publisher code + title number; also names <code>TDATA</code>/<code>UDATA</code> folders).</td></tr>
+                        <tr><td><code>0x000C</code></td><td>80</td><td><code>u16le[40]</code></td><td><code>TitleName</code></td><td>UTF-16LE NUL-terminated display title string (max 40 code units).</td></tr>
+                        <tr><td><code>0x005C</code></td><td>64</td><td><code>u32le[16]</code></td><td><code>AlternateTitleIds</code></td><td>Up to 16 alternate Title IDs permitted to share save/title data.</td></tr>
+                        <tr><td><code>0x009C</code></td><td>4</td><td><code>u32le</code></td><td><code>AllowedMedia</code></td><td>Bitmask of permitted boot media types (<code>AllowedMediaTypes</code>).</td></tr>
+                        <tr><td><code>0x00A0</code></td><td>4</td><td><code>u32le</code></td><td><code>GameRegion</code></td><td>Regional lockout bitmask (NA, Japan, Rest of World, Manufacturing).</td></tr>
+                        <tr><td><code>0x00A4</code></td><td>4</td><td><code>u32le</code></td><td><code>GameRatings</code></td><td>Parental control / age rating value.</td></tr>
+                        <tr><td><code>0x00A8</code></td><td>4</td><td><code>u32le</code></td><td><code>DiskNumber</code></td><td>Multi-disc index (0-based or 1-based disc number).</td></tr>
+                        <tr><td><code>0x00AC</code></td><td>4</td><td><code>u32le</code></td><td><code>Version</code></td><td>Title / XBE version number.</td></tr>
+                        <tr><td><code>0x00B0</code></td><td>16</td><td><code>u8[16]</code></td><td><code>LanKey</code></td><td>Title-specific 128-bit System Link key.</td></tr>
+                        <tr><td><code>0x00C0</code></td><td>16</td><td><code>u8[16]</code></td><td><code>SignatureKey</code></td><td>Title-specific 128-bit savegame HMAC-SHA1 signing key.</td></tr>
+                        <tr><td><code>0x00D0</code></td><td>256</td><td><code>u8[16][16]</code></td><td><code>AlternateSignatureKeys</code></td><td>16 additional 128-bit save signing keys for alternate titles/roaming saves.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>XBE Section Header (at <code>SectionHeadersAddress</code>, <code>0x38</code> / 56 bytes each)</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>4</td><td><code>u32le</code></td><td><code>SectionFlags</code></td><td>Memory protection, preload, and inserted-resource flags.</td></tr>
+                        <tr><td><code>0x0004</code></td><td>4</td><td><code>u32le</code></td><td><code>VirtualAddress</code></td><td>Target virtual address where the section is mapped.</td></tr>
+                        <tr><td><code>0x0008</code></td><td>4</td><td><code>u32le</code></td><td><code>VirtualSize</code></td><td>Virtual byte size reserved in memory (zero-filled beyond <code>RawSize</code>).</td></tr>
+                        <tr><td><code>0x000C</code></td><td>4</td><td><code>u32le</code></td><td><code>RawAddress</code></td><td>File offset of the section payload inside the <code>.xbe</code> file.</td></tr>
+                        <tr><td><code>0x0010</code></td><td>4</td><td><code>u32le</code></td><td><code>RawSize</code></td><td>Byte size of the initialized payload stored on disk.</td></tr>
+                        <tr><td><code>0x0014</code></td><td>4</td><td><code>u32le</code></td><td><code>SectionNameAddress</code></td><td>VA of NUL-terminated ASCII section name (e.g., <code>.text</code>, <code>.rdata</code>, <code>$$XTIMAGE</code>).</td></tr>
+                        <tr><td><code>0x0018</code></td><td>4</td><td><code>u32le</code></td><td><code>SectionNameRefCount</code></td><td>Runtime reference count (normally <code>0</code> on disk).</td></tr>
+                        <tr><td><code>0x001C</code></td><td>4</td><td><code>u32le</code></td><td><code>HeadSharedPageRefCountAddr</code></td><td>VA of a <code>u16le</code> shared-page reference counter for the first 4 KB page.</td></tr>
+                        <tr><td><code>0x0020</code></td><td>4</td><td><code>u32le</code></td><td><code>TailSharedPageRefCountAddr</code></td><td>VA of a <code>u16le</code> shared-page reference counter for the last 4 KB page.</td></tr>
+                        <tr><td><code>0x0024</code></td><td>20</td><td><code>u8[20]</code></td><td><code>SectionDigest</code></td><td>SHA-1 digest over <code>RawSize</code> (or <code>u32le(RawSize) || raw_bytes</code> in kernel verification).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>XBE Library Version (<code>0x10</code> bytes) &amp; TLS Directory (<code>0x18</code> bytes)</caption>
+                    <thead>
+                        <tr>
+                            <th>Offset</th>
+                            <th>Size</th>
+                            <th>Type</th>
+                            <th>Field</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>0x0000</code></td><td>8</td><td><code>char[8]</code></td><td><code>LibraryName</code></td><td>ASCII XDK library name, NUL-padded (e.g., <code>XAPILIB</code>, <code>D3D8</code>, <code>XBOXKRNL</code>).</td></tr>
+                        <tr><td><code>0x0008</code></td><td>2</td><td><code>u16le</code></td><td><code>MajorVersion</code></td><td>Library major version (e.g., <code>1</code>).</td></tr>
+                        <tr><td><code>0x000A</code></td><td>2</td><td><code>u16le</code></td><td><code>MinorVersion</code></td><td>Library minor version (e.g., <code>0</code>).</td></tr>
+                        <tr><td><code>0x000C</code></td><td>2</td><td><code>u16le</code></td><td><code>BuildVersion</code></td><td>XDK build number (e.g., <code>4627</code>, <code>5849</code>).</td></tr>
+                        <tr><td><code>0x000E</code></td><td>2</td><td><code>u16le</code></td><td><code>LibraryFlags</code></td><td>Bitfield packing QFE version, approval status, and debug flag.</td></tr>
+                        <tr><td colspan="5" class="group-row"><strong>XBE TLS Directory (at <code>TLSAddress</code>, <code>0x18</code> / 24 bytes)</strong></td></tr>
+                        <tr><td><code>0x0000</code></td><td>4</td><td><code>u32le</code></td><td><code>DataStartAddress</code></td><td>Start VA of thread-local initialized template data.</td></tr>
+                        <tr><td><code>0x0004</code></td><td>4</td><td><code>u32le</code></td><td><code>DataEndAddress</code></td><td>End VA of thread-local initialized template data.</td></tr>
+                        <tr><td><code>0x0008</code></td><td>4</td><td><code>u32le</code></td><td><code>TLSIndexAddress</code></td><td>VA of 32-bit TLS slot index variable.</td></tr>
+                        <tr><td><code>0x000C</code></td><td>4</td><td><code>u32le</code></td><td><code>TLSCallbackAddress</code></td><td>VA of NUL-terminated array of TLS callback function pointers (or <code>0</code>).</td></tr>
+                        <tr><td><code>0x0010</code></td><td>4</td><td><code>u32le</code></td><td><code>SizeOfZeroFill</code></td><td>Extra zero-initialized bytes appended after <code>DataEndAddress - DataStartAddress</code>.</td></tr>
+                        <tr><td><code>0x0014</code></td><td>4</td><td><code>u32le</code></td><td><code>Characteristics</code></td><td>PE TLS alignment/characteristics flags.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section" id="flags">
+            <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+            <h3>XOR Address Unmasking (EntryPoint &amp; KernelImageThunkAddress)</h3>
+            <p>
+                To distinguish retail, debug/devkit, and arcade builds and deter naive static inspection, the XBE
+                header stores <code>EntryPoint</code> and <code>KernelImageThunkAddress</code> XORed with 32-bit
+                constants. Unmasking is simple bitwise XOR:
+            </p>
+<pre><code>real_entry_va        = header.EntryPoint ^ XOR_EP_KEY
+real_kernel_thunk_va = header.KernelImageThunkAddress ^ XOR_KT_KEY</code></pre>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>Known XBE XOR Obfuscation Keys</caption>
+                    <thead>
+                        <tr>
+                            <th>Build Target</th>
+                            <th><code>XOR_EP_KEY</code></th>
+                            <th><code>XOR_KT_KEY</code></th>
+                            <th>Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Retail Xbox</td><td><code>0xA8FC57AB</code></td><td><code>0x5B6D40B6</code></td><td>All standard retail discs and dashboard XBEs.</td></tr>
+                        <tr><td>Debug / XDK Kit</td><td><code>0x94859D4B</code></td><td><code>0xEFB1F152</code></td><td>Development builds compiled for XDK debug units.</td></tr>
+                        <tr><td>Sega Chihiro</td><td><code>0x40B5C16E</code></td><td><code>0x2290059D</code></td><td>Xbox-derived arcade hardware target.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption>XBE <code>InitFlags</code> (<code>0x0124</code>) &amp; <code>SectionFlags</code> (Section <code>+0x00</code>)</caption>
+                    <thead>
+                        <tr>
+                            <th>Field</th>
+                            <th>Mask / Value</th>
+                            <th>Name</th>
+                            <th>Meaning</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>InitFlags</code></td><td><code>0x00000001</code></td><td><code>MountUtilityDrive</code></td><td>Mount/initialize utility partition (<code>Z:</code>) prior to title entry.</td></tr>
+                        <tr><td><code>InitFlags</code></td><td><code>0x00000002</code></td><td><code>FormatUtilityDrive</code></td><td>Format the utility drive when mounted.</td></tr>
+                        <tr><td><code>InitFlags</code></td><td><code>0x00000004</code></td><td><code>Limit64Megabytes</code></td><td>Restrict 128 MB XDK devkits to the retail 64 MB RAM ceiling.</td></tr>
+                        <tr><td><code>InitFlags</code></td><td><code>0x00000008</code></td><td><code>DontSetupHarddisk</code></td><td>Skip automatic hard disk partition setup on boot.</td></tr>
+                        <tr><td><code>SectionFlags</code></td><td><code>0x00000001</code></td><td><code>Writable</code></td><td>Section pages are mapped read/write.</td></tr>
+                        <tr><td><code>SectionFlags</code></td><td><code>0x00000002</code></td><td><code>Preload</code></td><td>Kernel loads section into RAM immediately before entry (otherwise demand-loaded if supported).</td></tr>
+                        <tr><td><code>SectionFlags</code></td><td><code>0x00000004</code></td><td><code>Executable</code></td><td>Section contains executable IA-32 code.</td></tr>
+                        <tr><td><code>SectionFlags</code></td><td><code>0x00000008</code></td><td><code>InsertedFile</code></td><td>Section was injected post-link (commonly <code>$$XTIMAGE</code> / <code>$$XSIMAGE</code> XPR0 icons).</td></tr>
+                        <tr><td><code>SectionFlags</code></td><td><code>0x00000010</code></td><td><code>HeadPageReadOnly</code></td><td>First 4 KB page of the section is read-only.</td></tr>
+                        <tr><td><code>SectionFlags</code></td><td><code>0x00000020</code></td><td><code>TailPageReadOnly</code></td><td>Last 4 KB page of the section is read-only.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="table-scroll">
+                <table class="format-counts">
+                    <caption><code>AllowedMediaTypes</code> (Certificate <code>+0x09C</code>) &amp; <code>LibraryFlags</code></caption>
+                    <thead>
+                        <tr>
+                            <th>Field</th>
+                            <th>Mask / Bits</th>
+                            <th>Name / Decoding</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000001</code></td><td><code>HARD_DISK</code></td><td>Permitted to launch from internal HDD.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000002</code></td><td><code>DVD_X2</code></td><td>Permitted on official retail XGD1 DVD-ROM discs.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000004</code></td><td><code>DVD_CD</code></td><td>Permitted on writable DVD/CD media (devkit).</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000008</code></td><td><code>CD</code></td><td>Permitted on CD-ROM.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000010</code></td><td><code>DVD_5_RO</code></td><td>Single-layer read-only DVD-5.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000020</code></td><td><code>DVD_9_RO</code></td><td>Dual-layer read-only DVD-9.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000040</code></td><td><code>DVD_5_RW</code></td><td>Single-layer writable DVD-5.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000080</code></td><td><code>DVD_9_RW</code></td><td>Dual-layer writable DVD-9.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000100</code></td><td><code>DONGLE</code></td><td>Dongle-authenticated boot media.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x00000200</code></td><td><code>MEDIA_BOARD</code></td><td>Chihiro DIMM / Media Board.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x40000000</code></td><td><code>NONSECURE_HARD_DISK</code></td><td>Allows launch from non-secure HDD image.</td></tr>
+                        <tr><td><code>AllowedMedia</code></td><td><code>0x80000000</code></td><td><code>NONSECURE_MODE</code></td><td>Allows non-secure execution mode.</td></tr>
+                        <tr><td><code>LibraryFlags</code></td><td><code>bits 0..12</code></td><td><code>flags &amp; 0x1FFF</code></td><td><code>QFEVersion</code> (Quick Fix Engineering patch level).</td></tr>
+                        <tr><td><code>LibraryFlags</code></td><td><code>bits 13..14</code></td><td><code>(flags &gt;&gt; 13) &amp; 0x3</code></td><td>Approval status: <code>0</code> = Unapproved, <code>1</code> = Possibly Approved, <code>2</code> = Approved.</td></tr>
+                        <tr><td><code>LibraryFlags</code></td><td><code>bit 15</code></td><td><code>(flags &amp; 0x8000) != 0</code></td><td><code>DebugBuild</code> flag (<code>1</code> = debug build of XDK library).</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3>Kernel Thunk Import Table &amp; Startup Logo</h3>
+            <ul>
+                <li><strong>Kernel Thunk Entries:</strong> At the unmasked <code>KernelImageThunkAddress</code> VA, a <code>0x00000000</code>-terminated array of <code>u32le</code> values encodes ordinal imports into <code>xboxkrnl.exe</code>. Every valid entry has bit 31 set (<code>entry &amp; 0x80000000 != 0</code>), and the kernel export ordinal is <code>ordinal = entry &amp; 0x7FFFFFFF</code>.</li>
+                <li><strong>Startup Logo &amp; Inserted Image Sections:</strong> <code>LogoBitmapAddress</code> / <code>LogoBitmapSize</code> point to an RLE-compressed 100&times;17 grayscale bitmap displayed by the kernel before jumping to the entry point. Many XBEs also embed dashboard title/save icons in <code>InsertedFile</code> sections named <code>$$XTIMAGE</code> and <code>$$XSIMAGE</code> formatted as <code>XPR0</code> containers.</li>
+            </ul>
+        </section>
+
+        <section class="section" id="edge-cases">
+            <h2>4. Edge Cases &amp; Loader Rules</h2>
+            <ul>
+                <li><strong>Retail vs. Debug vs. Chihiro Detection:</strong> Because the header stores no explicit "build type" enum, parsers try each <code>(XOR_EP_KEY, XOR_KT_KEY)</code> pair in turn. A key pair matches when <code>BaseAddress &le; unmasked_ep &lt; BaseAddress + SizeOfImage</code> (specifically falling inside an <code>Executable</code> section) <em>and</em> <code>unmasked_kt</code> falls within a readable section or header range with valid <code>0x8000xxxx</code> ordinals terminated by <code>0</code>.</li>
+                <li><strong>Virtual-to-File Address Translation:</strong> VAs in <code>[BaseAddress, BaseAddress + SizeOfHeaders)</code> map to <code>va - BaseAddress</code>. VAs inside sections must be translated by locating the section where <code>sec.VirtualAddress &le; va &lt; sec.VirtualAddress + sec.RawSize</code> and computing <code>sec.RawAddress + (va - sec.VirtualAddress)</code>; offsets in <code>[sec.RawSize, sec.VirtualSize)</code> have no backing bytes on disk and zero-fill in RAM.</li>
+                <li><strong>Generalized Section &amp; Thunk Mapping:</strong> A clean-room loader allocates virtual memory spanning <code>[BaseAddress, BaseAddress + SizeOfImage)</code>, copies bytes <code>[0, SizeOfHeaders)</code> to <code>BaseAddress</code>, maps each section&rsquo;s <code>RawSize</code> bytes to <code>VirtualAddress</code> (zero-padding up to <code>VirtualSize</code>), and patches the <code>u32le</code> array at <code>unmasked_kt</code> with kernel export addresses or import stubs.</li>
+                <li><strong>Inserted Sections:</strong> Sections marked with <code>InsertedFile</code> (<code>0x00000008</code>) and without <code>Preload</code> (<code>0x00000002</code>) are commonly metadata/image payloads (<code>$$XTIMAGE</code>, <code>$$XSIMAGE</code>) rather than code/data needed at launch.</li>
+            </ul>
+        </section>
+
+        <section class="section" id="pseudocode">
+            <h2>5. Step-by-Step Parser Pseudocode</h2>
+<pre><code>function parse_xbe(file):
+    magic = read_bytes(file, 0x0000, 4)
+    assert magic == b"XBEH"
+
+    base_addr    = read_u32le(file, 0x0104)
+    size_headers = read_u32le(file, 0x0108)
+    size_image   = read_u32le(file, 0x010C)
+    hdr_size     = read_u32le(file, 0x0110)
+    assert hdr_size &gt;= 0x0178 and size_headers &lt;= size_of(file)
+
+    cert_va      = read_u32le(file, 0x0118)
+    num_sections = read_u32le(file, 0x011C)
+    sec_hdrs_va  = read_u32le(file, 0x0120)
+    init_flags   = read_u32le(file, 0x0124)
+    raw_ep       = read_u32le(file, 0x0128)
+    tls_va       = read_u32le(file, 0x012C)
+    raw_kt       = read_u32le(file, 0x0158)
+    num_libs     = read_u32le(file, 0x0160)
+    libs_va      = read_u32le(file, 0x0164)
+
+    // 1. Parse section headers (all within header block)
+    sections = []
+    sec_off = sec_hdrs_va - base_addr
+    for i in 0 .. num_sections - 1:
+        off = sec_off + i * 0x38
+        s = {
+            flags:        read_u32le(file, off + 0x00),
+            va:           read_u32le(file, off + 0x04),
+            vsize:        read_u32le(file, off + 0x08),
+            raw_addr:     read_u32le(file, off + 0x0C),
+            raw_size:     read_u32le(file, off + 0x10),
+            name_va:      read_u32le(file, off + 0x14),
+            digest:       read_bytes(file, off + 0x24, 20),
+        }
+        assert s.raw_addr + s.raw_size &lt;= size_of(file)
+        s.name = read_cstr(file, va_to_file_offset(s.name_va, base_addr, size_headers, sections))
+        sections.append(s)
+
+    // 2. Detect Retail vs Debug vs Chihiro XOR keys
+    keys = [
+        ("Retail",  0xA8FC57AB, 0x5B6D40B6),
+        ("Debug",   0x94859D4B, 0xEFB1F152),
+        ("Chihiro", 0x40B5C16E, 0x2290059D),
+    ]
+    target_kind, entry_va, kt_va = null, 0, 0
+    for (kind, xor_ep, xor_kt) in keys:
+        ep = raw_ep ^ xor_ep
+        kt = raw_kt ^ xor_kt
+        if in_executable_section(ep, sections) and va_to_file_offset(kt, base_addr, size_headers, sections) != null:
+            target_kind, entry_va, kt_va = kind, ep, kt
+            break
+    assert target_kind != null
+
+    // 3. Parse Certificate
+    cert_off = va_to_file_offset(cert_va, base_addr, size_headers, sections)
+    cert = {
+        size:          read_u32le(file, cert_off + 0x00),
+        title_id:      read_u32le(file, cert_off + 0x08),
+        title_name:    read_utf16le_z(file, cert_off + 0x0C, 40),
+        allowed_media: read_u32le(file, cert_off + 0x9C),
+        game_region:   read_u32le(file, cert_off + 0xA0),
+        version:       read_u32le(file, cert_off + 0xAC),
+    }
+
+    // 4. Parse Kernel Thunk Ordinals
+    kt_off = va_to_file_offset(kt_va, base_addr, size_headers, sections)
+    kernel_ordinals = []
+    while true:
+        val = read_u32le(file, kt_off)
+        if val == 0: break
+        assert (val &amp; 0x80000000) != 0
+        kernel_ordinals.append(val &amp; 0x7FFFFFFF)
+        kt_off += 4
+
+    // 5. Parse Library Versions
+    lib_off = va_to_file_offset(libs_va, base_addr, size_headers, sections)
+    libraries = []
+    for i in 0 .. num_libs - 1:
+        off = lib_off + i * 0x10
+        flags = read_u16le(file, off + 0x0E)
+        libraries.append({
+            name:     read_ascii_z(file, off + 0x00, 8),
+            major:    read_u16le(file, off + 0x08),
+            minor:    read_u16le(file, off + 0x0A),
+            build:    read_u16le(file, off + 0x0C),
+            qfe:      flags &amp; 0x1FFF,
+            approved: (flags &gt;&gt; 13) &amp; 0x3,
+            debug:    (flags &amp; 0x8000) != 0,
+        })
+
+    return { target_kind, base_addr, entry_va, init_flags, cert, sections, kernel_ordinals, libraries }</code></pre>
+        </section>
+
+        <section class="section" id="provenance">
+            <h2>6. Provenance &amp; Confidence</h2>
+            <p>
+                <strong>High Confidence (Hardware / Kernel ABI):</strong> The <code>0x0178</code>-byte base header,
+                <code>0x01D0</code>-byte certificate, 56-byte section descriptors, 16-byte library version records,
+                24-byte TLS directory, XOR unmasking keys (Retail/Debug/Chihiro), and ordinal thunk encoding are
+                universally fixed by the Original Xbox kernel loader and verified across retail and XDK tools.
+            </p>
+            <p>
+                <strong>Revision-Dependent Fields:</strong> Header extensions past <code>0x0178</code>
+                (<code>LibraryFeatures</code>, <code>DebugInfo</code>) and certificate extensions past
+                <code>0x01D0</code> (<code>OnlineService</code>, <code>ExtraSecurityFlags</code>, <code>CodeEncKey</code>)
+                appear only in later XDK builds and must always be gated on <code>SizeOfImageHeader</code> and
+                <code>Certificate.Size</code>.
+            </p>
+            <aside class="callout-warn">
+                <strong>Signing &amp; Prototype Key Caveat:</strong> The 256-byte <code>DigitalSignature</code> uses
+                Microsoft&rsquo;s retail RSA-2048 private key (only the public modulus resides in retail boot ROMs and
+                is not reproduced here). Early pre-release/beta XDK prototypes used separate XOR obfuscation keys that
+                differ from the three production/devkit/Chihiro pairs tabulated above.
+            </aside>
+        </section>
+    </div>
+</body>
+</html>

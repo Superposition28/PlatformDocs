@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PARAM.SFO / PARAM.SFX &amp; PS3_DISC.SFB — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps3" target="_top">PlayStation 3</a><span>/</span><span>PARAM.SFO / PARAM.SFX &amp; PS3_DISC.SFB</span>
+    </nav>
+
+    <h1>PARAM.SFO / PARAM.SFX &amp; PS3_DISC.SFB</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">PlayStation 3 System Metadata &amp; Disc Descriptor Formats</p>
+        <p>PS3 titles rely on two complementary platform metadata containers: the <strong>PSF (System File Object)</strong> key-value store (<code>PARAM.SFO</code> and companion overlay <code>PARAM.SFX</code>) used by the XMB and CellOS for title attributes, and the <strong>SFB</strong> disc descriptor (<code>PS3_DISC.SFB</code>) placed at the root of Blu-ray discs. Notably, <code>PARAM.SFO</code>/<code>PARAM.SFX</code> are strictly <strong>little-endian</strong> despite living inside a big-endian system, whereas <code>PS3_DISC.SFB</code> is <strong>big-endian</strong>.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>PS3_GAME/PARAM.SFO</code>, <code>PS3_GAME/PARAM.SFX</code>, <code>PS3_DISC.SFB</code></dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>00 50 53 46</code> (<code>"\x00PSF"</code>, <code>0x46535000</code> LE) for SFO/SFX · <code>2E 53 46 42</code> (<code>".SFB"</code>, <code>0x2E534642</code> BE) for SFB</dd>
+            <dt>Endianness</dt>
+            <dd><strong>Hybrid:</strong> Little-endian (<code>LE</code>) for <code>PARAM.SFO</code> / <code>PARAM.SFX</code> · Big-endian (<code>BE</code>) for <code>PS3_DISC.SFB</code></dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 3 XMB, CellOS, and Blu-ray Disc authentication/boot sequence (PSF shared with PSP/PSVita)</dd>
+            <dt>Role/MIME</dt>
+            <dd>System parameter registry &amp; optical disc descriptor (<code>application/x-ps3-sfo</code>, <code>application/x-ps3-sfb</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">Identification &amp; Scope</a></li>
+            <li><a href="#layout">Binary Layout Tables</a></li>
+            <li><a href="#flags">Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">Parser Pseudocode</a></li>
+            <li><a href="#provenance">Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p><strong>Hybrid Endianness Warning:</strong> Although the PlayStation 3 CPU (Cell BE) and nearly all native PS3 system containers (SELF, PKG, TRP, SFB) are big-endian, <code>PARAM.SFO</code> and <code>PARAM.SFX</code> use <strong>little-endian</strong> 16-bit and 32-bit integers throughout their header, index table, and <code>uint32</code> values. This layout is inherited directly from Sony's cross-platform PSF specification (originally introduced on PSP).</p>
+        <ul>
+            <li><strong><code>PARAM.SFO</code>:</strong> Required in every disc (<code>PS3_GAME/PARAM.SFO</code>), PSN package, save-data directory, and game-data directory. Encodes <code>TITLE_ID</code>, <code>CATEGORY</code>, <code>APP_VER</code>, <code>PS3_SYSTEM_VER</code>, supported display <code>RESOLUTION</code>, <code>SOUND_FORMAT</code>, <code>PARENTAL_LEVEL</code>, and <code>ATTRIBUTE</code> bitmasks.</li>
+            <li><strong><code>PARAM.SFX</code>:</strong> Optional companion PSF file using the exact same <code>\x00PSF</code> binary schema. When present alongside <code>PARAM.SFO</code> (such as in game updates or special packages), it supplies supplemental or overridden XMB keys.</li>
+            <li><strong><code>PS3_DISC.SFB</code>:</strong> Present exclusively at the root of physical PS3 Blu-ray discs (<code>/PS3_DISC.SFB</code>). Uses <strong>big-endian</strong> 16-bit and 32-bit fields, starting with <code>0x2E534642</code> (<code>".SFB"</code>), to declare disc hybrid mode, <code>DISC_ID</code>/<code>TITLE_ID</code>, and disc mastering version.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PARAM.SFO / PARAM.SFX Header (20 bytes, Little-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u8[4]</code></td>
+                        <td><code>magic</code></td>
+                        <td>Bytes <code>00 50 53 46</code> (<code>"\x00PSF"</code>; <code>0x46535000</code> if read as <code>u32le</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>version</code></td>
+                        <td>PSF format version: <code>0x00000101</code> (v1.1; bytes <code>01 01 00 00</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>key_table_start</code></td>
+                        <td>Absolute file offset where the NUL-terminated ASCII key strings begin.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>data_table_start</code></td>
+                        <td>Absolute file offset where the value payload table begins.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>tables_entries</code></td>
+                        <td>Number of 16-byte index records immediately following at <code>0x14</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PARAM.SFO Index Entry (16 bytes per entry, starting at 0x14, Little-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>key_offset</code></td>
+                        <td>Byte offset of key string relative to <code>key_table_start</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x02</code></td>
+                        <td>2</td>
+                        <td><code>u16le</code></td>
+                        <td><code>data_fmt</code></td>
+                        <td>Value type tag: <code>0x0004</code> (UTF-8 special), <code>0x0204</code> (UTF-8 string), <code>0x0404</code> (<code>u32le</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>data_len</code></td>
+                        <td>Active byte length of value (includes NUL byte for <code>0x0204</code>; <code>4</code> for <code>0x0404</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>data_max_len</code></td>
+                        <td>Total allocated slot size in the data table (4-byte aligned, <code>&gt;= data_len</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0C</code></td>
+                        <td>4</td>
+                        <td><code>u32le</code></td>
+                        <td><code>data_offset</code></td>
+                        <td>Byte offset of value payload relative to <code>data_table_start</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PS3_DISC.SFB Header (32 bytes, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>magic</code></td>
+                        <td>Disc descriptor signature: <code>0x2E534642</code> (ASCII <code>".SFB"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>version_major</code></td>
+                        <td>Format major version (<code>1</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x06</code></td>
+                        <td>2</td>
+                        <td><code>u16be</code></td>
+                        <td><code>version_minor</code></td>
+                        <td>Format minor version (<code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>24</td>
+                        <td><code>u8[24]</code></td>
+                        <td><code>reserved</code></td>
+                        <td>Zero-filled padding up to directory table start at <code>0x20</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PS3_DISC.SFB Directory Entry (32 bytes per entry starting at 0x20, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>16</td>
+                        <td><code>char[16]</code></td>
+                        <td><code>key</code></td>
+                        <td>NUL-padded ASCII key (e.g., <code>"HYBRID_FLAG"</code>, <code>"DISC_ID"</code>); <code>0x00</code> first byte terminates table.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>data_offset</code></td>
+                        <td>Absolute file offset where the entry's value payload is stored (commonly <code>0x200</code>+).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>4</td>
+                        <td><code>u32be</code></td>
+                        <td><code>data_size</code></td>
+                        <td>Byte length of the value payload at <code>data_offset</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>8</td>
+                        <td><code>u8[8]</code></td>
+                        <td><code>reserved</code></td>
+                        <td>Zero padding.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>PARAM.SFO Data Formats (<code>data_fmt</code>)</h3>
+        <ul>
+            <li><code>0x0004</code> (<code>PSF_TYPE_BIN</code>): Raw/unterminated UTF-8 or binary blob of length <code>data_len</code> (used e.g. for <code>PARAMS</code> / <code>PARAMS2</code> in save-data SFOs or custom binary records).</li>
+            <li><code>0x0204</code> (<code>PSF_TYPE_STR</code>): NUL-terminated UTF-8 string; effective string slice is <code>raw[0 .. data_len - 1]</code> (strip trailing <code>0x00</code>).</li>
+            <li><code>0x0404</code> (<code>PSF_TYPE_INT</code>): 32-bit little-endian unsigned integer (<code>u32le</code>); <code>data_len</code> and <code>data_max_len</code> are both <code>4</code>.</li>
+        </ul>
+
+        <h3>PS3 Standard Keys &amp; Bitmasks</h3>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Common PS3 PARAM.SFO Keys &amp; Encodings</caption>
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Type</th>
+                        <th>Meaning &amp; Bitmask / Enum Values</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>TITLE_ID</code></td>
+                        <td><code>0x0204</code></td>
+                        <td>9-character product code (e.g., <code>BLES#####</code>, <code>BLUS#####</code>, <code>NPUB#####</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>CATEGORY</code></td>
+                        <td><code>0x0204</code></td>
+                        <td>2-byte category: <code>DG</code> (Disc Game), <code>HG</code> (HDD Game), <code>GD</code> (Game Data), <code>AP</code> (App), <code>SF</code> (Save Data), <code>1P</code>/<code>2D</code> (PS1/PS2 Classic).</td>
+                    </tr>
+                    <tr>
+                        <td><code>APP_VER</code> / <code>VERSION</code></td>
+                        <td><code>0x0204</code></td>
+                        <td>Application / package version string (<code>"01.00"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>PS3_SYSTEM_VER</code></td>
+                        <td><code>0x0204</code></td>
+                        <td>Minimum required firmware version string (e.g., <code>"03.5500"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>BOOTABLE</code></td>
+                        <td><code>0x0404</code></td>
+                        <td><code>1</code> = launchable application with <code>EBOOT.BIN</code>, <code>0</code> = data-only package.</td>
+                    </tr>
+                    <tr>
+                        <td><code>PARENTAL_LEVEL</code></td>
+                        <td><code>0x0404</code></td>
+                        <td>System parental control level (<code>0</code>–<code>11</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>RESOLUTION</code></td>
+                        <td><code>0x0404</code></td>
+                        <td>Supported video bitmask: <code>0x01</code>=480p, <code>0x02</code>=576p, <code>0x04</code>=720p, <code>0x08</code>=1080i, <code>0x10</code>=1080p, <code>0x20</code>=480p 16:9, <code>0x40</code>=576p 16:9.</td>
+                    </tr>
+                    <tr>
+                        <td><code>SOUND_FORMAT</code></td>
+                        <td><code>0x0404</code></td>
+                        <td>Supported audio bitmask: <code>0x01</code>=2ch LPCM, <code>0x04</code>=5.1 LPCM, <code>0x10</code>=7.1 LPCM, <code>0x102</code>=Dolby Digital 5.1, <code>0x202</code>=DTS 5.1.</td>
+                    </tr>
+                    <tr>
+                        <td><code>ATTRIBUTE</code></td>
+                        <td><code>0x0404</code></td>
+                        <td>System capability bitmask: <code>0x00000001</code> Remote Play v1, <code>0x00000002</code> Copy-Prohibit (save), <code>0x00000004</code> Remote Play v2, <code>0x00000010</code> Installable/Move, <code>0x00000020</code> XMB In-Game BGM, <code>0x00000040</code> Cross-Controller, <code>0x00000080</code> Screenshot/Trophy-era capability flag.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>PS3_DISC.SFB Keys</h3>
+        <ul>
+            <li><code>HYBRID_FLAG</code>: ASCII flag string indicating disc content classes (e.g., <code>"g"</code> = PS3 Game, <code>"vg"</code> = BD-Video + PS3 Game hybrid, <code>"u"</code> = update/special).</li>
+            <li><code>DISC_ID</code> (or <code>TITLE_ID</code>): 9-character product identifier (hyphen often omitted or normalized, padded to 16 bytes).</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader / Parser Rules</h2>
+        <ul>
+            <li><strong>4-Byte Alignment &amp; Padding:</strong> In <code>PARAM.SFO</code>, the key table ends with NUL padding to align <code>data_table_start</code> to a 4-byte boundary. Every value slot reserves <code>data_max_len</code> bytes (also 4-byte aligned), while <code>data_len</code> records the active length. Parsers MUST slice <code>data_len</code> bytes rather than reading up to <code>data_max_len</code> when decoding strings, and MUST skip <code>data_max_len</code> when advancing or validating offsets.</li>
+            <li><strong>Lexicographical Key Sorting:</strong> Official Sony SFO builders sort keys in ascending ASCII lexicographical order; the XMB/CellOS lookup routines assume sorted order for binary search, so writers modifying an SFO must re-sort index entries by key name.</li>
+            <li><strong>String NUL-Termination Quirks:</strong> Although <code>data_fmt == 0x0204</code> specifies a NUL-terminated UTF-8 string, malformed or patched SFOs occasionally omit the trailing NUL inside <code>data_len</code>. Parsers should clamp to <code>data_len</code> and strip any trailing <code>0x00</code> bytes safely.</li>
+            <li><strong><code>PS3_DISC.SFB</code> Table Termination:</strong> The directory table at <code>0x20</code> has no explicit <code>entry_count</code> field in its header. Iteration stops upon reading an entry whose 16-byte <code>key</code> begins with <code>0x00</code> or when the read cursor reaches the smallest <code>data_offset</code> (commonly <code>0x200</code>).</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Parser Pseudocode</h2>
+        <pre><code>function parse_param_sfo(stream):
+    magic = read_bytes(stream, 0x00, 4)
+    assert magic == b"\x00PSF"
+    version          = read_u32le(stream, 0x04)
+    key_table_start  = read_u32le(stream, 0x08)
+    data_table_start = read_u32le(stream, 0x0C)
+    entry_count      = read_u32le(stream, 0x10)
+
+    params = {}
+    for i in 0 .. entry_count - 1:
+        off          = 0x14 + i * 0x10
+        key_off      = read_u16le(stream, off + 0x00)
+        data_fmt     = read_u16le(stream, off + 0x02)
+        data_len     = read_u32le(stream, off + 0x04)
+        data_max_len = read_u32le(stream, off + 0x08)
+        data_off     = read_u32le(stream, off + 0x0C)
+
+        assert data_len &lt;= data_max_len
+        key_name = read_cstr_ascii(stream, key_table_start + key_off)
+        val_pos  = data_table_start + data_off
+
+        if data_fmt == 0x0404:
+            assert data_len == 4
+            params[key_name] = read_u32le(stream, val_pos)
+        elif data_fmt == 0x0204:
+            raw = read_bytes(stream, val_pos, data_len)
+            params[key_name] = decode_utf8(strip_trailing_nul(raw))
+        elif data_fmt == 0x0004:
+            params[key_name] = read_bytes(stream, val_pos, data_len)
+        else:
+            params[key_name] = ("unknown_fmt", data_fmt, read_bytes(stream, val_pos, data_len))
+
+    return { version: version, entries: params }
+
+
+function parse_ps3_disc_sfb(stream):
+    magic = read_u32be(stream, 0x00)
+    assert magic == 0x2E534642  // ".SFB"
+    ver_major = read_u16be(stream, 0x04)
+    ver_minor = read_u16be(stream, 0x06)
+
+    fields = {}
+    cursor = 0x20
+    limit  = file_size(stream)
+    while cursor + 0x20 &lt;= limit:
+        raw_key = read_bytes(stream, cursor + 0x00, 16)
+        if raw_key[0] == 0x00:
+            break
+        key_name    = decode_ascii(split_at_first_nul(raw_key))
+        data_offset = read_u32be(stream, cursor + 0x10)
+        data_size   = read_u32be(stream, cursor + 0x14)
+        limit       = min(limit, data_offset)
+
+        raw_val = read_bytes(stream, data_offset, data_size)
+        fields[key_name] = decode_ascii(strip_trailing_nul(raw_val))
+        cursor += 0x20
+
+    return { version: (ver_major, ver_minor), fields: fields }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <ul>
+            <li><strong>Confirmed Specification:</strong> The 20-byte PSF header, 16-byte index record, data types (<code>0x0004</code>, <code>0x0204</code>, <code>0x0404</code>), and <code>PS3_DISC.SFB</code> 32-byte header/directory structure are fully confirmed across retail PS3 discs and PSN packages.</li>
+            <li><strong>Firmware-Revision-Dependent Fields:</strong> Higher bits of <code>ATTRIBUTE</code> and newer <code>CATEGORY</code> codes (such as remote play / Vita / Move / BGM extensions) were introduced incrementally across CellOS firmware updates; tools targeting older firmwares may ignore unknown upper bits.</li>
+        </ul>
+        <aside class="callout-warn" aria-label="Save-data SFO protection note">
+            <p><strong>Save-Data &amp; Integrity Note:</strong> While disc and package <code>PARAM.SFO</code> files are unencrypted, save-game <code>PARAM.SFO</code> files in <code>SAVEDATA</code> directories store HMAC/CMAC digests inside <code>PARAM.PFD</code> and binary <code>PARAMS</code>/<code>PARAMS2</code> fields. Editing a save-game SFO without recomputing the companion <code>PARAM.PFD</code> console/disc-keyed hashes will fail system integrity checks.</p>
+        </aside>
+    </section>
+</body>
+</html>

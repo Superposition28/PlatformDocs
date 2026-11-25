@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Nintendo DS ARM Overlays (y9.bin / y7.bin) &amp; BLZ Compression — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#nds" target="_top">Nintendo DS</a><span>/</span><span>ARM Overlays &amp; BLZ Compression</span>
+    </nav>
+
+    <h1>ARM9 / ARM7 Overlay Tables (<code>y9.bin</code> / <code>y7.bin</code>) &amp; BLZ Compression</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Platform Binary Specification · Dynamic Code Overlays &amp; Backwards LZ</p>
+        <p>Nintendo DS titles exceeding static Main RAM or WRAM budgets dynamically page code and read-only data segments using ARM9 (<code>y9.bin</code>) and ARM7 (<code>y7.bin</code>) overlay descriptor tables. Overlay payloads and compressed static <code>arm9.bin</code> suffixes are packed with Nitro SDK backwards LZ77 (<strong>BLZ</strong>) compression so they can decompress in-place.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>y9.bin</code> (ARM9 overlay table), <code>y7.bin</code> (ARM7 overlay table), FAT-indexed overlay binaries</dd>
+            <dt>Magic Bytes</dt>
+            <dd>None (flat array of 32-byte little-endian records; referenced via ROM header <code>0x0050–0x005F</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Little-endian (<code>u32le</code>)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo DS (NTR) &amp; Nintendo DSi (TWL) Nitro SDK overlay manager (<code>FS_LoadOverlay</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Relocatable/fixed-address RAM overlay metadata &amp; backwards-LZ compressed executable segments</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">Identification &amp; Scope</a></li>
+            <li><a href="#layout">Binary Layout Tables</a></li>
+            <li><a href="#flags">Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">Parser Pseudocode</a></li>
+            <li><a href="#provenance">Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>The ROM header locates the ARM9 overlay table at <code>0x0050</code> (<code>arm9_overlay_offset</code>, <code>arm9_overlay_size</code>) and the ARM7 overlay table at <code>0x0058</code> (<code>arm7_overlay_offset</code>, <code>arm7_overlay_size</code>). Each table is an integer multiple of 32 bytes (<code>entry_count = table_size / 32</code>), with no header or magic signature.</p>
+        <p>When an overlay entry sets its compression flag, the FAT file referenced by <code>file_id</code> is compressed using Nitro SDK <strong>BLZ</strong> (Backwards LZ77), identified by an 8-byte (or padded 9–11-byte) footer positioned at the very end of the file buffer. All integers in both the overlay tables and BLZ footer are <strong>little-endian</strong>.</p>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Overlay Table Record (32 bytes per overlay entry in y9.bin / y7.bin)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>0x00</td><td>4</td><td>u32le</td><td>overlay_id</td><td>0-based logical overlay identifier.</td></tr>
+                    <tr><td>0x04</td><td>4</td><td>u32le</td><td>ram_address</td><td>Target RAM address where overlay code/data is loaded.</td></tr>
+                    <tr><td>0x08</td><td>4</td><td>u32le</td><td>ram_size</td><td>Uncompressed initialized size in bytes (excluding <code>.bss</code>).</td></tr>
+                    <tr><td>0x0C</td><td>4</td><td>u32le</td><td>bss_size</td><td>Zero-initialized <code>.bss</code> byte size appended at <code>ram_address + ram_size</code>.</td></tr>
+                    <tr><td>0x10</td><td>4</td><td>u32le</td><td>static_init_start</td><td>Start RAM address of C++ static constructor (<code>.ctor</code>) pointer table.</td></tr>
+                    <tr><td>0x14</td><td>4</td><td>u32le</td><td>static_init_end</td><td>End RAM address of static constructor pointer table (exclusive).</td></tr>
+                    <tr><td>0x18</td><td>4</td><td>u32le</td><td>file_id</td><td>NitroFS FAT file index containing the overlay binary payload.</td></tr>
+                    <tr><td>0x1C</td><td>4</td><td>u32le</td><td>flags_and_size</td><td>Bits <code>0–23</code>: compressed payload size in bytes; bits <code>24–31</code>: overlay flags.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>BLZ Backwards-LZ Footer (at end of compressed buffer, bottom = buf_end)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>bottom - header_len</td><td>header_len - 8</td><td>u8[]</td><td>padding</td><td>Optional <code>0–3</code> bytes of <code>0xFF</code> alignment padding before the 8-byte trailer.</td></tr>
+                    <tr><td>bottom - 8</td><td>4</td><td>u32le</td><td>buffer_top_and_hdr</td><td>Bits <code>0–23</code>: <code>buffer_top_offset</code> (bytes from compressed start to <code>bottom</code>); bits <code>24–31</code>: <code>header_len</code> (typically <code>8–11</code>).</td></tr>
+                    <tr><td>bottom - 4</td><td>4</td><td>u32le</td><td>inc_size</td><td>Additional bytes produced beyond <code>bottom</code> after decompression (<code>decompressed_end = bottom + inc_size</code>).</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>Overlay Entry Bitfields (<code>0x1C</code>)</h3>
+        <ul>
+            <li><code>compressed_size = flags_and_size &amp; 0x00FFFFFF</code></li>
+            <li><code>flags = (flags_and_size &gt;&gt; 24) &amp; 0xFF</code>:
+                <ul>
+                    <li><strong>Bit 0 (<code>0x01</code>):</strong> <code>is_compressed</code> — <code>1</code> if the FAT payload is BLZ-compressed, <code>0</code> if stored as raw uncompressed binary of length <code>ram_size</code>.</li>
+                    <li><strong>Bit 1 (<code>0x02</code>):</strong> <code>is_authenticated</code> — <code>1</code> when HMAC/authentication metadata is associated with the overlay (used in signed/TWL contexts).</li>
+                    <li><strong>Bits 2–7:</strong> Reserved (zero).</li>
+                </ul>
+            </li>
+        </ul>
+
+        <h3>BLZ Footer &amp; Bitstream Decoding</h3>
+        <p>BLZ compresses and decompresses backwards from high addresses to low addresses. Given a buffer of length <code>bottom</code>:</p>
+        <ul>
+            <li><code>buffer_top_offset = buffer_top_and_hdr &amp; 0x00FFFFFF</code></li>
+            <li><code>header_len = (buffer_top_and_hdr &gt;&gt; 24) &amp; 0xFF</code></li>
+            <li><strong>Compressed input range:</strong> reads backwards from <code>src = bottom - header_len</code> down to <code>stop_src = bottom - buffer_top_offset</code>. Bytes in <code>[0, stop_src)</code> are an uncompressed prefix copied verbatim.</li>
+            <li><strong>Output write pointer:</strong> starts at <code>dst = bottom + inc_size</code> and writes backwards down to <code>stop_src</code>. Total decompressed size is <code>bottom + inc_size</code>.</li>
+            <li><strong>Token encoding:</strong> Each control byte <code>flags</code> read via <code>*(--src)</code> governs 8 tokens from MSB (bit 7) to LSB (bit 0):
+                <ul>
+                    <li>Flag bit <code>== 0</code>: literal byte <code>*(--dst) = *(--src)</code>.</li>
+                    <li>Flag bit <code>== 1</code>: 2-byte backreference <code>b1 = *(--src)</code>, <code>b2 = *(--src)</code>:
+                        <ul>
+                            <li><code>match_len = (b1 &gt;&gt; 4) + 3</code> (range <code>3..18</code> bytes)</li>
+                            <li><code>disp = (((b1 &amp; 0x0F) &lt;&lt; 8) | b2) + 3</code> (lookahead distance into already-decompressed higher addresses relative to the newly written destination byte <code>dst - 1</code>; equivalently <code>*(old_dst + disp - 1)</code> before decrementing <code>dst</code>)</li>
+                        </ul>
+                    </li>
+                </ul>
+            </li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>In-Place Overlay Loading:</strong> The Nitro SDK loader reads the overlay file from FAT directly into <code>ram_address</code>, runs <code>MIi_UncompressBackward</code> in place if <code>flags &amp; 0x01</code> is set (expanding up to <code>ram_address + ram_size</code>), zeroes <code>bss_size</code> bytes at <code>ram_address + ram_size</code>, flushes the ARM9 data/instruction caches, and executes function pointers from <code>static_init_start</code> up to <code>static_init_end</code>.</li>
+            <li><strong><code>arm9.bin</code> Self-Decompressing Suffix:</strong> Static <code>arm9.bin</code> binaries may also be BLZ-compressed. Unlike overlays, the ROM header has no compression flag for <code>arm9.bin</code>; instead, Nitro SDK embeds a module-parameter block containing magic <code>0xDEC00621</code> (<code>21 06 C0 DE</code> on disk) with pointers to the compressed region end so the startup stub calls <code>MIi_UncompressBackward</code> before entering main code.</li>
+            <li><strong>Padding &amp; Size Discrepancy:</strong> Because FAT entries may be 4-byte aligned, check <code>compressed_size</code> at <code>0x1C</code> when locating the BLZ <code>bottom</code> if the FAT file has trailing alignment bytes, or verify <code>header_len</code> lies in <code>8..11</code> and <code>buffer_top_offset &lt;= bottom</code>.</li>
+            <li><strong>Empty Overlay Tables:</strong> When <code>arm9_overlay_size == 0</code> or <code>arm7_overlay_size == 0</code>, the corresponding offset in the ROM header is <code>0</code> and no overlay table exists.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Parser &amp; Decompressor Pseudocode</h2>
+        <pre><code>function parse_overlay_table(table_bytes):
+    assert len(table_bytes) % 32 == 0
+    overlays = []
+    for off in range(0, len(table_bytes), 32):
+        flags_size = read_u32le(table_bytes, off + 0x1C)
+        overlays.append({
+            overlay_id:        read_u32le(table_bytes, off + 0x00),
+            ram_address:       read_u32le(table_bytes, off + 0x04),
+            ram_size:          read_u32le(table_bytes, off + 0x08),
+            bss_size:          read_u32le(table_bytes, off + 0x0C),
+            static_init_start: read_u32le(table_bytes, off + 0x10),
+            static_init_end:   read_u32le(table_bytes, off + 0x14),
+            file_id:           read_u32le(table_bytes, off + 0x18),
+            compressed_size:   flags_size &amp; 0x00FFFFFF,
+            is_compressed:     (flags_size &amp; 0x01000000) != 0,
+            is_authenticated:  (flags_size &amp; 0x02000000) != 0,
+        })
+    return overlays
+
+function blz_decompress(comp_buf):
+    bottom = len(comp_buf)
+    assert bottom &gt;= 8
+
+    top_and_hdr = read_u32le(comp_buf, bottom - 8)
+    inc_size    = read_u32le(comp_buf, bottom - 4)
+
+    top_offset  = top_and_hdr &amp; 0x00FFFFFF
+    header_len  = (top_and_hdr &gt;&gt; 24) &amp; 0xFF
+    assert 8 &lt;= header_len &lt;= bottom
+    assert header_len &lt;= top_offset &lt;= bottom
+
+    stop_src = bottom - top_offset
+    out_len  = bottom + inc_size
+    out      = allocate_bytes(out_len)
+
+    # Copy uncompressed prefix [0 .. stop_src)
+    out[0 : stop_src] = comp_buf[0 : stop_src]
+
+    src = bottom - header_len
+    dst = out_len
+
+    while src &gt; stop_src:
+        flags = comp_buf[src - 1]
+        src -= 1
+        for bit in range(8):
+            if src &lt;= stop_src:
+                break
+            if (flags &amp; (0x80 &gt;&gt; bit)) == 0:
+                src -= 1
+                dst -= 1
+                out[dst] = comp_buf[src]
+            else:
+                assert src &gt;= stop_src + 2
+                b1 = comp_buf[src - 1]
+                b2 = comp_buf[src - 2]
+                src -= 2
+                match_len = (b1 &gt;&gt; 4) + 3
+                disp      = (((b1 &amp; 0x0F) &lt;&lt; 8) | b2) + 3
+                for _ in range(match_len):
+                    dst -= 1
+                    assert dst + disp &lt; out_len
+                    out[dst] = out[dst + disp]
+
+    assert dst == stop_src
+    return out</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <p>The 32-byte overlay table layout (<code>y9.bin</code> / <code>y7.bin</code>) and BLZ backwards-LZ decompression logic are <strong>confirmed</strong> across Nitro SDK overlay managers and standard NDS ROM toolchains.</p>
+        <aside class="callout-warn">
+            <strong>Caveats:</strong> Overlay flag bit 1 (<code>0x02000000</code>) and higher bits depend on SDK revision and DSi authentication extensions; clean-room extraction tools only require bit 0 (<code>0x01000000</code>) to determine whether BLZ decompression applies. For static <code>arm9.bin</code> images, locate the <code>0xDEC00621</code> module parameter marker before attempting BLZ decompression, as uncompressed <code>arm9.bin</code> files have no BLZ footer.
+        </aside>
+    </section>
+</body>
+</html>

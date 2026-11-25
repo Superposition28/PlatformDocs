@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GameCube Disc Image (.iso / .gcm) &amp; FST — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a>
+        <span>/</span>
+        <a href="../../index.html#gamecube" target="_top">Nintendo GameCube</a>
+        <span>/</span>
+        <span>Disc Image (.iso / .gcm) &amp; FST</span>
+    </nav>
+
+    <h1>GameCube Disc Image (<code>.iso</code> / <code>.gcm</code>) &amp; FST</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">Platform Container &amp; Filesystem · Nintendo GameCube</p>
+        <p>Raw sector-level image of an 8 cm Nintendo Optical Disc containing the fixed-offset system boot headers (<code>boot.bin</code>, <code>bi2.bin</code>), the Apploader binary, the main <code>.dol</code> executable, the File System Table (<code>fst.bin</code>), and referenced file payloads.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>*.iso</code>, <code>*.gcm</code> (extracted system regions: <code>boot.bin</code>, <code>bi2.bin</code>, <code>apploader.img</code>, <code>fst.bin</code>)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>C2 33 9F 3D</code> (<code>u32be</code> <code>0xC2339F3D</code>) at disc offset <code>0x001C</code></dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian (PowerPC / Dolphin OS)</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>Nintendo GameCube (IPL / BS2 / Dolphin OS <code>DVD</code> API)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Optical disc container &amp; read-only flat-entry filesystem (<code>application/x-gamecube-iso-image</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">1. Identification &amp; Scope</a></li>
+            <li><a href="#layout">2. Binary Layout Tables</a></li>
+            <li><a href="#flags">3. Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">4. Edge Cases &amp; Loader/Parser Rules</a></li>
+            <li><a href="#pseudocode">5. Step-by-Step Parser Pseudocode</a></li>
+            <li><a href="#provenance">6. Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>GameCube optical disc images store raw 2048-byte user sectors without an ISO-9660 or UDF volume descriptor. Both <code>.iso</code> and <code>.gcm</code> (GameCube Master) refer to the exact same unencrypted byte stream; a full single-layer retail disc image measures exactly <code>1,459,978,240</code> bytes (<code>0x57058000</code> bytes, 712,880 sectors).</p>
+        <ul>
+            <li><strong>Primary Magic:</strong> Offset <code>0x001C</code> holds big-endian <code>0xC2339F3D</code> (bytes <code>C2 33 9F 3D</code>). Note that Wii discs place their magic <code>0x5D1C9EA3</code> at <code>0x0018</code> instead, leaving <code>0x001C</code> as <code>0x00000000</code>.</li>
+            <li><strong>Console ID Byte:</strong> Offset <code>0x0000</code> is an ASCII prefix character—typically <code>'G'</code> (<code>0x47</code>, retail GameCube), <code>'D'</code> (<code>0x44</code>, demo/kiosk), <code>'P'</code> (<code>0x50</code>, promotional), or <code>'U'</code> (<code>0x55</code>, utility/loader disc).</li>
+            <li><strong>Endianness:</strong> All numeric fields in <code>boot.bin</code>, <code>bi2.bin</code>, the Apploader header, and <code>fst.bin</code> are strictly big-endian.</li>
+        </ul>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll" role="region" aria-label="Disc top-level layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Top-Level Disc Image Regions</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td><code>0x0440</code></td>
+                        <td>struct</td>
+                        <td><code>boot.bin</code></td>
+                        <td>Disc header: IDs, DVD magic word, title string, and offsets to debug monitor, main <code>.dol</code>, and <code>fst.bin</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0440</code></td>
+                        <td><code>0x2000</code></td>
+                        <td>struct</td>
+                        <td><code>bi2.bin</code></td>
+                        <td>Boot Info 2: simulated memory size, debug flags, country code, and boot argument metadata.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x2440</code></td>
+                        <td><code>0x0020 + S + T</code></td>
+                        <td>struct</td>
+                        <td>Apploader</td>
+                        <td>32-byte Apploader header followed by PowerPC code body (<code>S</code>) and trailer (<code>T</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>boot.bin[0x0420]</code></td>
+                        <td>variable</td>
+                        <td><code>.dol</code></td>
+                        <td>Main Executable</td>
+                        <td>Static <code>.dol</code> executable loaded by the Apploader; offset is not fixed across discs.</td>
+                    </tr>
+                    <tr>
+                        <td><code>boot.bin[0x0424]</code></td>
+                        <td><code>boot.bin[0x0428]</code></td>
+                        <td>struct</td>
+                        <td><code>fst.bin</code></td>
+                        <td>File System Table (12-byte entry array followed by NUL-terminated string pool).</td>
+                    </tr>
+                    <tr>
+                        <td>variable</td>
+                        <td>up to <code>0x57058000</code></td>
+                        <td>bytes</td>
+                        <td>File Data Area</td>
+                        <td>File payloads referenced by FST file entries (commonly aligned to 4, 32, or 2048 bytes and placed toward outer disc sectors).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="boot.bin header layout" tabindex="0">
+            <table class="format-counts">
+                <caption><code>boot.bin</code> Disc Header (<code>0x0000</code> &ndash; <code>0x043F</code>, 1088 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>char[4]</code></td>
+                        <td><code>GameCode</code></td>
+                        <td>4-character ASCII ID: Console ID (1), Title Code (2), Region/Language (1).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0004</code></td>
+                        <td><code>0x02</code></td>
+                        <td><code>char[2]</code></td>
+                        <td><code>MakerCode</code></td>
+                        <td>2-character ASCII publisher/licensee code.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0006</code></td>
+                        <td><code>0x01</code></td>
+                        <td><code>u8</code></td>
+                        <td><code>DiscId</code></td>
+                        <td>Zero-based disc index in multi-disc releases (<code>0x00</code> for Disc 1).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0007</code></td>
+                        <td><code>0x01</code></td>
+                        <td><code>u8</code></td>
+                        <td><code>Version</code></td>
+                        <td>Disc revision number (<code>0x00</code> = initial release).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0008</code></td>
+                        <td><code>0x01</code></td>
+                        <td><code>u8</code></td>
+                        <td><code>AudioStreaming</code></td>
+                        <td>Hardware disc audio streaming flag (<code>0x00</code> = disabled, <code>0x01</code> = enabled).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0009</code></td>
+                        <td><code>0x01</code></td>
+                        <td><code>u8</code></td>
+                        <td><code>StreamBufferSize</code></td>
+                        <td>Hardware ADPCM stream buffer size selector (<code>0x00</code> = default 10 buffers when enabled, or unused).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x000A</code></td>
+                        <td><code>0x12</code></td>
+                        <td><code>u8[18]</code></td>
+                        <td><code>Reserved0A</code></td>
+                        <td>Zero-padded reserved bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x001C</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>DvdMagicWord</code></td>
+                        <td>Must equal <code>0xC2339F3D</code> for GameCube discs.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0020</code></td>
+                        <td><code>0x3E0</code></td>
+                        <td><code>char[992]</code></td>
+                        <td><code>GameName</code></td>
+                        <td>NUL-terminated internal disc title string (ASCII or Shift-JIS); trailing bytes zero-padded.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0400</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>DebugMonitorOffset</code></td>
+                        <td>Disc byte offset to debug monitor (MetroTRK) binary, or <code>0</code> if absent.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0404</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>DebugMonitorLoadAddr</code></td>
+                        <td>RAM load address for debug monitor, or <code>0</code> if absent.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0408</code></td>
+                        <td><code>0x18</code></td>
+                        <td><code>u8[24]</code></td>
+                        <td><code>Reserved408</code></td>
+                        <td>Zero-padded reserved bytes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0420</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>DolOffset</code></td>
+                        <td>Disc byte offset to the main bootable <code>.dol</code> executable.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0424</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>FstOffset</code></td>
+                        <td>Disc byte offset to <code>fst.bin</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0428</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>FstSize</code></td>
+                        <td>Byte size of <code>fst.bin</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x042C</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>FstMaxSize</code></td>
+                        <td>Maximum FST size across all discs in a multi-disc set (<code>&gt;= FstSize</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0430</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>UserPosition</code></td>
+                        <td>Virtual RAM load address for FST / user boot area (often populated by Apploader or <code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0434</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>UserLength</code></td>
+                        <td>Byte length of user/debug region, or <code>0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0438</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>Unknown438</code></td>
+                        <td>SDK-dependent field (typically <code>0</code> or boot flags).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x043C</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>Padding43C</code></td>
+                        <td>Reserved zero-padding (<code>0x00000000</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="bi2.bin layout" tabindex="0">
+            <table class="format-counts">
+                <caption><code>bi2.bin</code> Boot Info 2 (<code>0x0440</code> &ndash; <code>0x243F</code>, 8192 bytes)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code> (disc <code>0x0440</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>DebugMonitorSize</code></td>
+                        <td>Byte size of debug monitor (<code>0</code> on retail discs).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0004</code> (disc <code>0x0444</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>SimulatedMemorySize</code></td>
+                        <td>Simulated main memory size in bytes (standard retail: <code>0x01800000</code> = 24 MiB).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0008</code> (disc <code>0x0448</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>ArgumentOffset</code></td>
+                        <td>Offset to boot argument string block, or <code>0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x000C</code> (disc <code>0x044C</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>DebugFlag</code></td>
+                        <td>Debug configuration flag (<code>0</code> on retail builds).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0010</code> (disc <code>0x0450</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>TrackLocation</code></td>
+                        <td>Debug track/symbol offset, or <code>0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0014</code> (disc <code>0x0454</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>TrackSize</code></td>
+                        <td>Debug track/symbol size, or <code>0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0018</code> (disc <code>0x0458</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>CountryCode</code></td>
+                        <td>Region code (<code>0</code> = JPN, <code>1</code> = USA, <code>2</code> = EUR/PAL).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x001C</code> (disc <code>0x045C</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>TotalDisc</code></td>
+                        <td>SDK-revision-dependent count or reserved word (commonly <code>0x00000001</code> or <code>0x00000000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0020</code> (disc <code>0x0460</code>)</td>
+                        <td><code>0x1FE0</code></td>
+                        <td><code>u8[8160]</code></td>
+                        <td><code>Padding</code></td>
+                        <td>Zero-filled padding up to <code>0x2000</code> bytes total.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="Apploader header layout" tabindex="0">
+            <table class="format-counts">
+                <caption>Apploader Header &amp; Body (<code>0x2440</code>+)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0000</code> (disc <code>0x2440</code>)</td>
+                        <td><code>0x10</code></td>
+                        <td><code>char[16]</code></td>
+                        <td><code>Date</code></td>
+                        <td>NUL-padded ASCII build date (e.g., <code>"2001/08/27"</code> or <code>"2004/02/01"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0010</code> (disc <code>0x2450</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>EntryPoint</code></td>
+                        <td>PowerPC RAM entry address for the Apploader initializer (typically <code>0x81200000+</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0014</code> (disc <code>0x2454</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>Size</code></td>
+                        <td>Byte size of the Apploader code section starting at <code>0x2460</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0018</code> (disc <code>0x2458</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>TrailerSize</code></td>
+                        <td>Byte size of the Apploader trailer/data block immediately following the code section.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x001C</code> (disc <code>0x245C</code>)</td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>Padding</code></td>
+                        <td>Zero-padding to 32-byte boundary (<code>0x00000000</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0020</code> (disc <code>0x2460</code>)</td>
+                        <td><code>Size + TrailerSize</code></td>
+                        <td><code>u8[]</code></td>
+                        <td><code>ApploaderPayload</code></td>
+                        <td>Raw PowerPC machine code and trailer loaded into RAM by IPL.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll" role="region" aria-label="fst.bin layout" tabindex="0">
+            <table class="format-counts">
+                <caption><code>fst.bin</code> Entry Record (12 bytes per entry, followed by String Table at <code>N * 12</code>)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td><code>0x01</code></td>
+                        <td><code>u8</code></td>
+                        <td><code>IsDirectory</code></td>
+                        <td>High byte of first <code>u32be</code>: <code>0x00</code> = File, <code>0x01</code> = Directory (including root entry <code>0</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x01</code></td>
+                        <td><code>0x03</code></td>
+                        <td><code>u24be</code></td>
+                        <td><code>NameOffset</code></td>
+                        <td>24-bit byte offset into the String Table (located at <code>fst_start + total_entries * 12</code>). Ignored (<code>0</code>) for root entry <code>0</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x04</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>FileOffset</code> / <code>ParentIndex</code></td>
+                        <td>If File: absolute byte offset in disc image. If Directory: 0-based FST index of parent directory (<code>0</code> for root and top-level dirs).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td><code>0x04</code></td>
+                        <td><code>u32be</code></td>
+                        <td><code>FileLength</code> / <code>NextIndex</code></td>
+                        <td>If File: byte length of file. If Directory: exclusive end FST index (<code>TotalEntries</code> for root entry <code>0</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>FST Entry Bit-Packing</h3>
+        <p>Each 12-byte FST entry packs its entry type and string-table offset into a single <code>u32be</code> word at entry offset <code>0x00</code>:</p>
+        <pre><code>word0        = read_u32be(entry + 0x00)
+is_directory = ((word0 &gt;&gt; 24) &amp; 0xFF) != 0   // bit 24: 0x01 = directory, 0x00 = file
+name_offset  = word0 &amp; 0x00FFFFFF             // bits 0..23: relative to string_table_base</code></pre>
+        <p>Because root entry <code>0</code> is always a directory whose <code>0x08</code> field holds <code>TotalEntries</code> (<code>N</code>), the string table always begins at:</p>
+        <pre><code>string_table_base = fst_offset + (total_entries * 12)</code></pre>
+
+        <h3>Directory Traversal Invariant</h3>
+        <p>The FST is stored in pre-order depth-first sequence. For any directory entry at index <code>i</code> with <code>next_idx = entry[i].NextIndex</code>:</p>
+        <ul>
+            <li>Immediate children and nested descendants occupy indices <code>i + 1</code> through <code>next_idx - 1</code>.</li>
+            <li>When iterating directory <code>i</code>'s direct children starting at <code>child = i + 1</code>, if <code>child</code> is a file, advance to <code>child + 1</code>; if <code>child</code> is a directory, jump directly over its subtree to <code>entry[child].NextIndex</code>.</li>
+        </ul>
+
+        <h3>Region / Country Code Enums</h3>
+        <ul>
+            <li><strong><code>boot.bin[0x0003]</code> (GameCode region suffix):</strong> <code>'E'</code> (USA/NTSC), <code>'P'</code> (Europe/PAL), <code>'J'</code> (Japan/NTSC), <code>'K'</code> (Korea), <code>'W'</code> (Taiwan), <code>'X'</code>/<code>'Y'</code>/<code>'D'</code>/<code>'F'</code>/<code>'S'</code>/<code>'I'</code> (localized European variants).</li>
+            <li><strong><code>bi2.bin[0x0018]</code> (<code>CountryCode</code>):</strong> <code>0</code> = Japan, <code>1</code> = USA, <code>2</code> = Europe/PAL.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader/Parser Rules</h2>
+        <ul>
+            <li><strong>Disc Bounds &amp; Scrubbed Images:</strong> Retail full-size dumps are <code>0x57058000</code> bytes, whereas trimmed images end after the highest referenced file sector. Always validate <code>DolOffset</code>, <code>FstOffset + FstSize</code>, and every FST file's <code>FileOffset + FileLength &lt;= image_size</code> before reading.</li>
+            <li><strong>FST Bounds &amp; Cycles:</strong> Verify <code>FstSize &gt;= 12</code>, <code>TotalEntries &gt;= 1</code>, and <code>TotalEntries * 12 &lt;= FstSize</code>. For every directory entry <code>i</code>, enforce <code>i &lt; NextIndex &lt;= TotalEntries</code> so malformed or cyclic FSTs cannot cause infinite recursion.</li>
+            <li><strong>24-bit String Offset Bounds:</strong> Enforce <code>string_table_base + name_offset &lt; fst_offset + FstSize</code> and search for a NUL terminator strictly within <code>fst_offset + FstSize</code>. Reject names containing path separators (<code>'/'</code>, <code>'\'</code>) or <code>".."</code> when extracting to a host filesystem.</li>
+            <li><strong>Generalized Apploader &amp; Boot Loader Mapping:</strong> A clean-room parser does not execute the PowerPC Apploader binary. Instead, it locates the main <code>.dol</code> via <code>boot.bin[0x0420]</code> and <code>fst.bin</code> via <code>boot.bin[0x0424..0x0428]</code>, and models the BS2/Apploader memory state using <code>bi2.bin[0x0444]</code> (<code>SimulatedMemorySize</code>, typically 24 MiB) and <code>boot.bin[0x042C]</code> (<code>FstMaxSize</code>).</li>
+            <li><strong>System File Exclusion:</strong> <code>boot.bin</code>, <code>bi2.bin</code>, Apploader, main <code>.dol</code>, and <code>fst.bin</code> do not appear as entries inside <code>fst.bin</code>; extractors commonly materialize them as synthetic system files alongside the FST tree.</li>
+            <li><strong>Compressed Wrappers Excluded:</strong> Formats such as <code>.gcz</code>, <code>.ciso</code>, and <code>.rvz</code> wrap or re-pack raw sectors with external compression headers and must be decompressed to raw 2048-byte-sector layout before applying this specification.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Step-by-Step Parser Pseudocode</h2>
+        <pre><code>struct FstNode:
+    is_dir: bool
+    name: string
+    disc_offset: u32    // valid if !is_dir
+    length: u32         // valid if !is_dir
+    parent_idx: u32     // valid if is_dir
+    next_idx: u32       // valid if is_dir
+
+function parse_gamecube_disc(stream, image_size):
+    assert image_size &gt;= 0x2460
+    boot = read_bytes(stream, 0x0000, 0x0440)
+    bi2  = read_bytes(stream, 0x0440, 0x2000)
+
+    magic = read_u32be(boot, 0x001C)
+    assert magic == 0xC2339F3D, "Not a GameCube disc image"
+
+    game_code  = read_ascii(boot, 0x0000, 4)
+    maker_code = read_ascii(boot, 0x0004, 2)
+    disc_id    = boot[0x0006]
+    version    = boot[0x0007]
+    game_name  = read_cstr(boot, 0x0020, 0x3E0)
+
+    dol_offset   = read_u32be(boot, 0x0420)
+    fst_offset   = read_u32be(boot, 0x0424)
+    fst_size     = read_u32be(boot, 0x0428)
+    fst_max_size = read_u32be(boot, 0x042C)
+    country_code = read_u32be(bi2,  0x0018)
+
+    assert dol_offset &gt;= 0x2460 and dol_offset + 0x0100 &lt;= image_size
+    assert fst_offset &gt;= 0x2460 and fst_size &gt;= 12
+    assert fst_offset + fst_size &lt;= image_size
+
+    app_hdr = read_bytes(stream, 0x2440, 0x20)
+    app_size    = read_u32be(app_hdr, 0x14)
+    app_trailer = read_u32be(app_hdr, 0x18)
+    assert 0x2460 + app_size + app_trailer &lt;= image_size
+
+    fst_buf = read_bytes(stream, fst_offset, fst_size)
+    root_word0 = read_u32be(fst_buf, 0x00)
+    assert ((root_word0 &gt;&gt; 24) &amp; 0xFF) == 1, "FST entry 0 must be root directory"
+
+    total_entries = read_u32be(fst_buf, 0x08)
+    assert total_entries &gt;= 1 and total_entries * 12 &lt;= fst_size
+
+    str_table_off = total_entries * 12
+    nodes = []
+    for i in 0 .. total_entries - 1:
+        base = i * 12
+        word0 = read_u32be(fst_buf, base + 0x00)
+        word1 = read_u32be(fst_buf, base + 0x04)
+        word2 = read_u32be(fst_buf, base + 0x08)
+
+        is_dir = ((word0 &gt;&gt; 24) &amp; 0xFF) != 0
+        name_off = word0 &amp; 0x00FFFFFF
+        if i == 0:
+            name = ""
+        else:
+            assert str_table_off + name_off &lt; fst_size
+            name = read_cstr(fst_buf, str_table_off + name_off, fst_size - (str_table_off + name_off))
+
+        if is_dir:
+            assert word2 &gt; i and word2 &lt;= total_entries, "Invalid directory NextIndex"
+            nodes.append(FstNode(true, name, 0, 0, word1, word2))
+        else:
+            assert word1 + word2 &lt;= image_size, "File extends past disc image"
+            nodes.append(FstNode(false, name, word1, word2, 0, 0))
+
+    return { game_code, maker_code, disc_id, version, game_name, country_code, dol_offset, fst_max_size, nodes }
+
+function build_directory_paths(nodes, dir_idx = 0, prefix = ""):
+    results = []
+    idx = dir_idx + 1
+    end_idx = nodes[dir_idx].next_idx
+    while idx &lt; end_idx:
+        node = nodes[idx]
+        rel_path = (prefix == "") ? node.name : (prefix + "/" + node.name)
+        if node.is_dir:
+            results.extend(build_directory_paths(nodes, idx, rel_path))
+            idx = node.next_idx
+        else:
+            results.append((rel_path, node.disc_offset, node.length))
+            idx += 1
+    return results</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <aside class="callout-warn">
+            <p><strong>SDK-revision &amp; reserved fields:</strong> Fields at <code>boot.bin[0x0430..0x043F]</code> (<code>UserPosition</code>, <code>UserLength</code>, <code>Unknown438</code>) and <code>bi2.bin[0x045C]</code> vary across Dolphin SDK revisions and mastering tools (`makedisk`). Parsers should inspect them diagnostically rather than hardcoding non-zero values.</p>
+        </aside>
+        <ul>
+            <li><strong>Confirmed Hardware/IPL Specs:</strong> Fixed offsets <code>0x0000</code> (<code>boot.bin</code>), <code>0x0440</code> (<code>bi2.bin</code>), <code>0x2440</code> (Apploader header), magic <code>0xC2339F3D</code> at <code>0x001C</code>, and 24-bit FST string offsets with bit-24 directory flag are invariant across retail GameCube discs.</li>
+            <li><strong>SDK-Revision-Dependent:</strong> Apploader build date strings, exact Apploader entry points (<code>0x81200000</code>–<code>0x81200258+</code>), <code>AudioStreaming</code> buffer defaults, and debug monitor offsets (<code>0x0400</code>–<code>0x0407</code>, zeroed on retail discs).</li>
+        </ul>
+    </section>
+</body>
+</html>
