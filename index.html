@@ -27,7 +27,7 @@
                 <ul class="overview-links">
                     <li><a href="#docs-guide">Read the Documentation Guide</a></li>
                     <li><span class="scope-badge">11 Platforms</span></li>
-                    <li><span class="scope-badge">42 Format Specifications</span></li>
+                    <li><span class="scope-badge">43 Format Specifications</span></li>
                     <li><span class="badge confidence-confirmed">Pure Static file:// Shell</span></li>
                 </ul>
             </section>
@@ -35,9 +35,9 @@
             <section class="format-coverage" aria-labelledby="platform-coverage-title">
                 <div class="format-coverage-heading">
                     <h2 id="platform-coverage-title">Platform Coverage &amp; Legend</h2>
-                    <p>Coverage across 11 platforms and 42 platform-inherited format specifications. See the <a href="#docs-guide">Documentation Guide</a> for the 6-section specification standard and executable loader rules.</p>
+                    <p>Coverage across 11 platforms and 43 platform-inherited format specifications. See the <a href="#docs-guide">Documentation Guide</a> for the 6-section specification standard and executable loader rules.</p>
                 </div>
-                <p class="coverage-summary"><strong>11 platforms · 42 format specifications</strong> — pure static <code>file://</code> reference with lazy iframe routing.</p>
+                <p class="coverage-summary"><strong>11 platforms · 43 format specifications</strong> — pure static <code>file://</code> reference with lazy iframe routing.</p>
                 <ul class="format-coverage-legend" aria-label="Confidence and scope legend">
                     <li><span class="coverage-icon coverage-green" role="img" aria-label="Confirmed specification"></span><strong>Confirmed Spec</strong> Hardware / public ABI verified</li>
                     <li><span class="coverage-icon coverage-yellow" role="img" aria-label="SDK revision dependent"></span><strong>SDK-Revision-Dependent</strong> Varies by SDK / firmware</li>
@@ -71,7 +71,7 @@
                     </li>
                     <li class="format-coverage-item">
                         <span class="coverage-icon coverage-yellow" role="img" aria-label="PlayStation 3"></span>
-                        <div><strong><a href="#ps3">PlayStation 3 (PS3)</a></strong> <span class="coverage-status">4 formats · Cell PPU/SPU · Big-Endian</span><span class="coverage-detail">SELF/EBOOT.BIN NPDRM wrappers &amp; ELF64, PARAM.SFO metadata, PKG distribution archives, TRP trophy packs.</span></div>
+                        <div><strong><a href="#ps3">PlayStation 3 (PS3)</a></strong> <span class="coverage-status">5 formats · Cell PPU/SPU · Big-Endian</span><span class="coverage-detail">SELF/EBOOT.BIN NPDRM wrappers &amp; ELF64, PARAM.SFO metadata, PKG distribution archives, TRP trophy packs, PUP firmware updates.</span></div>
                     </li>
                     <li class="format-coverage-item">
                         <span class="coverage-icon coverage-yellow" role="img" aria-label="PlayStation 4"></span>
@@ -95,7 +95,7 @@
             <nav class="documentation-tree" aria-labelledby="documentation-tree-title">
                 <div class="documentation-tree-heading">
                     <h2 id="documentation-tree-title">Documentation Map</h2>
-                    <p>Browse all 11 platform overviews and 42 clean-room format specifications. Click any card title for the platform boot chain or select a format directly.</p>
+                    <p>Browse all 11 platform overviews and 43 clean-room format specifications. Click any card title for the platform boot chain or select a format directly.</p>
                 </div>
 
                 <ul class="platform-grid">
@@ -200,13 +200,14 @@
                                 <a class="platform-card-title" href="#ps3">PlayStation 3</a>
                                 <p class="platform-card-meta">Cell PPU/SPU · Big-Endian · Blu-ray/PSN</p>
                             </div>
-                            <span class="badge confidence-revision">4 specs</span>
+                            <span class="badge confidence-revision">5 specs</span>
                         </div>
                         <ul class="platform-card-formats">
                             <li><a href="#ps3-self-eboot"><span>SELF / EBOOT.BIN</span><code>.self / .bin</code></a></li>
                             <li><a href="#ps3-param-sfo"><span>PARAM.SFO Metadata</span><code>PARAM.SFO</code></a></li>
                             <li><a href="#ps3-pkg"><span>PKG Package Archive</span><code>.pkg</code></a></li>
                             <li><a href="#ps3-trp"><span>TRP Trophy Pack</span><code>TROPHY.TRP</code></a></li>
+                            <li><a href="#ps3-pup"><span>PUP Firmware Update</span><code>.pup</code></a></li>
                         </ul>
                     </li>
 
@@ -326,6 +327,7 @@
         <iframe class="page" id="ps3-param-sfo" data-src="platforms/ps3/param-sfo.html" src="about:blank" loading="lazy" title="PS3 PARAM.SFO Format"></iframe>
         <iframe class="page" id="ps3-pkg" data-src="platforms/ps3/pkg.html" src="about:blank" loading="lazy" title="PS3 PKG Package Format"></iframe>
         <iframe class="page" id="ps3-trp" data-src="platforms/ps3/trp.html" src="about:blank" loading="lazy" title="PS3 TRP Trophy Pack Format"></iframe>
+        <iframe class="page" id="ps3-pup" data-src="platforms/ps3/pup.html" src="about:blank" loading="lazy" title="PS3 PUP Firmware Update Format"></iframe>
 
         <!-- PlayStation 4 -->
         <iframe class="page" id="ps4" data-src="platforms/ps4/index.html" src="about:blank" loading="lazy" title="PlayStation 4 Overview"></iframe>

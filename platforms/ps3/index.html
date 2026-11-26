@@ -26,7 +26,7 @@
             <dt>Distribution Media</dt>
             <dd>Blu-ray Disc (<code>BD-ROM</code>, ISO-9660 / UDF 2.50) and PlayStation Network digital packages (<code>.pkg</code>)</dd>
             <dt>Primary Endianness</dt>
-            <dd>Big-endian (<code>BE</code>) for Cell PPU/SPU code, SCE/SELF, PKG, SFB, and TRP; Little-endian (<code>LE</code>) for <code>PARAM.SFO</code> / <code>PARAM.SFX</code></dd>
+            <dd>Big-endian (<code>BE</code>) for Cell PPU/SPU code, SCE/SELF, PKG, PUP, SFB, and TRP; Little-endian (<code>LE</code>) for <code>PARAM.SFO</code> / <code>PARAM.SFX</code></dd>
         </dl>
     </section>
 
@@ -177,6 +177,13 @@
                         <td><code>0xDCA24D00</code></td>
                         <td>BE</td>
                         <td>Trophy asset container (v1–v3) holding <code>TROPCONF.SFM</code>, localized <code>TROP*.SFM</code>, PNG icons, and SHA-1 integrity.</td>
+                    </tr>
+                    <tr>
+                        <td><a href="../../index.html#ps3-pup" target="_top">PS3UPDAT.PUP Firmware Update</a></td>
+                        <td><code>PS3UPDAT.PUP</code>, <code>PS3PATCH.PUP</code></td>
+                        <td><code>0x5343455546000000</code> (<code>SCEUF\0\0\0</code>)</td>
+                        <td>BE</td>
+                        <td>System firmware update container with HMAC-SHA1 tables, updater SELFs, VSH/update tarballs, and SPKG headers.</td>
                     </tr>
                 </tbody>
             </table>

@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PS3UPDAT.PUP / .pup (PS3 System Firmware Update) — PlatformDocs</title>
+    <link rel="stylesheet" href="../../style/main.css">
+</head>
+<body class="doc-page">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../../index.html#home" target="_top">PlatformDocs</a><span>/</span><a href="../../index.html#ps3" target="_top">PlayStation 3</a><span>/</span><span>PS3UPDAT.PUP</span>
+    </nav>
+
+    <h1>PS3UPDAT.PUP / .pup (PS3 System Firmware Update)</h1>
+
+    <section class="format-summary" aria-label="Format summary">
+        <p class="eyebrow">PlayStation 3 System Software Update Container</p>
+        <p><strong><code>PS3UPDAT.PUP</code></strong> (PlayStation Update Package) is Sony Computer Entertainment's big-endian container format for PlayStation 3 system firmware updates, Blu-ray disc minimum-version installers, and incremental delta patches (<code>PS3PATCH.PUP</code>). It pairs a 48-byte <code>SCEUF</code> header, a 32-byte-per-entry file directory, a parallel HMAC-SHA1 hash table, and a header HMAC footer with contiguous plaintext metadata, POSIX <code>ustar</code> archives, and signed <code>SCE\0</code> payloads.</p>
+        <dl>
+            <dt>Canonical Filenames</dt>
+            <dd><code>/PS3_UPDATE/PS3UPDAT.PUP</code> (disc, 256 MiB padded), <code>/PS3/UPDATE/PS3UPDAT.PUP</code> (USB FAT32), <code>PS3PATCH.PUP</code> (CDN delta)</dd>
+            <dt>Magic Bytes</dt>
+            <dd><code>53 43 45 55 46 00 00 00</code> (<code>0x5343455546000000</code>, ASCII <code>"SCEUF\0\0\0"</code>)</dd>
+            <dt>Endianness</dt>
+            <dd>Big-endian (<code>BE</code>) for all PUP headers, entry tables, hash records, and inner <code>SCE\0</code> headers; POSIX <code>ustar</code> TAR payloads</dd>
+            <dt>Platform/OS Scope</dt>
+            <dd>PlayStation 3 System Updater (<code>ps3swu.self</code> / <code>ps3swu2.self</code>), XMB Update, and Recovery Menu (<code>package_version = 1</code>)</dd>
+            <dt>Role/MIME</dt>
+            <dd>Signed system firmware update archive (<code>application/x-ps3-pup</code>)</dd>
+        </dl>
+    </section>
+
+    <nav class="page-toc" aria-label="On this page">
+        <strong>On this page</strong>
+        <ul>
+            <li><a href="#identification">Identification &amp; Scope</a></li>
+            <li><a href="#layout">Binary Layout Tables</a></li>
+            <li><a href="#flags">Flags, Enums &amp; Decoding Formulas</a></li>
+            <li><a href="#edge-cases">Edge Cases &amp; Loader Rules</a></li>
+            <li><a href="#pseudocode">Parser Pseudocode</a></li>
+            <li><a href="#provenance">Provenance &amp; Confidence</a></li>
+        </ul>
+    </nav>
+
+    <section id="identification">
+        <h2>1. Identification &amp; Scope</h2>
+        <p>Every PlayStation 3 firmware update package begins with the 8-byte signature <code>53 43 45 55 46 00 00 00</code> (<code>0x5343455546000000</code>, ASCII <code>"SCEUF\0\0\0"</code> — <em>Sony Computer Entertainment Update File</em>) followed by <code>package_version = 1</code>. All multi-byte integers in the PUP header, entry table, hash table, and embedded <code>SCE\0</code> containers are strictly <strong>big-endian</strong>. Embedded tarball members (<code>vsh.tar</code>, <code>update_files.tar</code>, <code>spkg_hdr.tar</code>) use standard 512-byte-blocked POSIX <code>ustar</code> archives, while top-level configuration and EULA members use UTF-8 / ASCII text or XML.</p>
+        <p>Depending on delivery medium, the container appears in three canonical locations:</p>
+        <ul>
+            <li><strong>Optical disc (<code>/PS3_UPDATE/PS3UPDAT.PUP</code>):</strong> Bundled on retail Blu-ray game discs to guarantee minimum system software; retail disc images zero-pad the file after <code>header_length + data_length</code> to an exact <code>256 MiB</code> (<code>0x10000000</code> bytes).</li>
+            <li><strong>Removable storage (<code>/PS3/UPDATE/PS3UPDAT.PUP</code>):</strong> Placed on FAT32 USB storage for offline XMB or Safe Mode installation at exact <code>header_length + data_length</code> size.</li>
+            <li><strong>Network CDN (<code>ps3-updatelist.txt</code>):</strong> Distributed either as a full <code>PS3UPDAT.PUP</code> image or as an incremental delta package named <code>PS3PATCH.PUP</code> keyed to a specific base build.</li>
+        </ul>
+        <p><strong>Scope &amp; Disambiguation:</strong> This specification covers PlayStation 3 <code>SCEUF</code> (<code>package_version = 1</code>) packages only. PlayStation 4 <code>.PUP</code> installers use an unrelated <code>SLB2</code> (<code>0x534C4232</code>) container, PSP firmware updates use <code>EBOOT.PBP</code>, and PS Vita <code>SCEUF</code> updates use distinct entry IDs. Furthermore, <code>*.pkg</code> files inside <code>update_files.tar</code> (such as <code>CORE_OS_PACKAGE.pkg</code>) are <a href="../../index.html#ps3-self-eboot" target="_top"><code>SCE\0</code></a> certified packages (<code>category = 3</code>, SPKG), <strong>not</strong> PSN <a href="../../index.html#ps3-pkg" target="_top"><code>\x7FPKG</code></a> installation archives.</p>
+    </section>
+
+    <section id="layout">
+        <h2>2. Binary Layout Tables</h2>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PUP Main Header (48 bytes, offset 0x00..0x2F, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>8</td>
+                        <td><code>char[8]</code></td>
+                        <td><code>magic</code></td>
+                        <td>Container signature: <code>0x5343455546000000</code> (<code>"SCEUF\0\0\0"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>package_version</code></td>
+                        <td>PUP container format version; always <code>1</code> across retail PS3 firmware releases.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>image_version</code></td>
+                        <td>Monotonically increasing firmware build number (e.g., <code>0x06FC</code> = 1788 for FW 1.02; <code>0x10B94</code> = 68500 for FW 4.93). Matches the 8-hex-digit <code>ImageVersion</code> in <code>ps3-updatelist.txt</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>file_count</code></td>
+                        <td>Number of packed member entries (<code>N</code>) in both the File Entry Table and Hash Entry Table.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x20</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>header_length</code></td>
+                        <td>Total byte length of the header region (<code>0x50 + N * 0x40</code>). The payload data region starts immediately at this offset.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x28</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>data_length</code></td>
+                        <td>Total byte length of the contiguous payload data region (<code>sum(entry[i].data_length)</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>File Entry Record (32 bytes per entry at 0x30, <code>file_count</code> entries, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>entry_id</code></td>
+                        <td>Numeric member identifier defining role and canonical filename (see Section 3).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>data_offset</code></td>
+                        <td>Absolute byte offset of the member payload from the start of the <code>.PUP</code> file.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x10</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>data_length</code></td>
+                        <td>Exact byte length of the member payload.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x18</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>padding</code></td>
+                        <td>Reserved zero padding (<code>0</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Hash Entry Record (32 bytes per entry at <code>0x30 + file_count * 0x20</code>, <code>file_count</code> entries, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>8</td>
+                        <td><code>u64be</code></td>
+                        <td><code>entry_index</code></td>
+                        <td>0-based index (<code>0 .. file_count - 1</code>) referencing the corresponding File Entry Record (not <code>entry_id</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x08</code></td>
+                        <td>20</td>
+                        <td><code>u8[20]</code></td>
+                        <td><code>hmac_sha1</code></td>
+                        <td>20-byte HMAC-SHA1 digest computed over payload bytes <code>[data_offset .. data_offset + data_length)</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x1C</code></td>
+                        <td>4</td>
+                        <td><code>u8[4]</code></td>
+                        <td><code>padding</code></td>
+                        <td>Reserved zero padding (<code>00 00 00 00</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Header Integrity Footer (32 bytes at <code>header_length - 0x20</code>, Big-Endian)</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>20</td>
+                        <td><code>u8[20]</code></td>
+                        <td><code>header_hmac_sha1</code></td>
+                        <td>20-byte HMAC-SHA1 digest covering all preceding header bytes <code>[0x00 .. header_length - 0x20)</code> (Main Header + File Entry Table + Hash Entry Table).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x14</code></td>
+                        <td>12</td>
+                        <td><code>u8[12]</code></td>
+                        <td><code>padding</code></td>
+                        <td>Reserved zero padding (<code>0x00</code> &times; 12) extending up to <code>header_length</code>.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Overall Container Region Map</caption>
+                <thead>
+                    <tr>
+                        <th>Offset</th>
+                        <th>Size</th>
+                        <th>Type</th>
+                        <th>Field</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x00</code></td>
+                        <td>48</td>
+                        <td><code>PUPHeader</code></td>
+                        <td>Main Header</td>
+                        <td><code>SCEUF</code> signature, version, build counter, entry count, and region sizes.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30</code></td>
+                        <td><code>file_count * 0x20</code></td>
+                        <td><code>FileEntry[N]</code></td>
+                        <td>File Entry Table</td>
+                        <td>Ordered array of 32-byte entry descriptors pointing into the payload region.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30 + N * 0x20</code></td>
+                        <td><code>file_count * 0x20</code></td>
+                        <td><code>HashEntry[N]</code></td>
+                        <td>Hash Entry Table</td>
+                        <td>Parallel array of 32-byte HMAC-SHA1 records indexed by <code>entry_index</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x30 + N * 0x40</code></td>
+                        <td>32</td>
+                        <td><code>HeaderFooter</code></td>
+                        <td>Header Integrity Footer</td>
+                        <td>20-byte <code>header_hmac_sha1</code> + 12-byte zero padding ending at <code>header_length</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>header_length</code></td>
+                        <td><code>data_length</code></td>
+                        <td><code>u8[data_length]</code></td>
+                        <td>Payload Data Region</td>
+                        <td>Contiguously concatenated entry payloads packed without inter-file alignment padding.</td>
+                    </tr>
+                    <tr>
+                        <td><code>header_length + data_length</code></td>
+                        <td><code>0</code> or pad to <code>0x10000000</code></td>
+                        <td><code>u8[]</code></td>
+                        <td>Disc Tail Padding (Optional)</td>
+                        <td>Absent in CDN/USB PUPs; Blu-ray disc <code>PS3UPDAT.PUP</code> images append trailing <code>0x00</code> bytes to 256 MiB.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Inner <code>update_files.tar</code> (<code>0x300</code>) &amp; <code>spkg_hdr.tar</code> (<code>0x501</code>) SCE Certified Members</caption>
+                <thead>
+                    <tr>
+                        <th>SCE Category</th>
+                        <th><code>header_len</code></th>
+                        <th>Canonical Members</th>
+                        <th>Role &amp; Container Relationship</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x0001</code> (SELF)</td>
+                        <td><code>0x0880</code> (2176 B)</td>
+                        <td><code>ps3swu.self</code> (<code>0x200</code>), <code>ps3swu2.self</code> (<code>0x601</code>)</td>
+                        <td>Top-level PUP System Software Updater executables (<a href="../../index.html#ps3-self-eboot" target="_top"><code>SCE\0</code> SELF</a>, <code>key_revision = 0x0001</code> or <code>0x000D</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0002</code> (RVK)</td>
+                        <td><code>0x0200</code> (512 B)</td>
+                        <td><code>RL_FOR_PACKAGE.img</code>, <code>RL_FOR_PROGRAM.img</code></td>
+                        <td>Revocation lists inside <code>0x300</code>; excluded from <code>0x501</code> (<code>spkg_hdr.tar</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0003</code> (SPKG)</td>
+                        <td><code>0x0280</code> (640 B)</td>
+                        <td><code>UPL.xml.pkg</code>, <code>CORE_OS_PACKAGE.pkg</code>, <code>dev_flash_*.tar.aa.&lt;timestamp&gt;</code>, <code>dev_flash3_*.tar.aa.&lt;timestamp&gt;</code>, <code>BDIT_FIRMWARE_PACKAGE.pkg</code>, <code>BDPT_FIRMWARE_PACKAGE_*.pkg</code>, <code>BLUETOOTH_FIRMWARE.pkg</code>, <code>MULTI_CARD_FIRMWARE.pkg</code>, <code>SYS_CON_FIRMWARE_*.pkg</code>, <code>patch_data.pkg</code> (<code>0x203</code>)</td>
+                        <td>Signed system packages containing encrypted/compressed flash tarballs, LV0/LV1/LV2 CoreOS packages, update manifests (<code>UPL.xml</code>), and peripheral firmware.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x0003</code> (SPKG Header)</td>
+                        <td><code>0x0280</code> (640 B exact)</td>
+                        <td><code>&lt;member_name&gt;.spkg_hdr.1</code> (in <code>0x501</code>)</td>
+                        <td>Detached 640-byte alternate <code>SCE\0</code> headers (FW 3.56+) matching each SPKG member in <code>0x300</code>; identical 32-byte common header (<code>0x00..0x1F</code>) with re-signed metadata/ECDSA blocks (<code>0x20..0x27F</code>).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section id="flags">
+        <h2>3. Flags, Enums &amp; Decoding Formulas</h2>
+
+        <h3>Canonical Entry ID Registry</h3>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>PS3 PUP <code>entry_id</code> Mapping</caption>
+                <thead>
+                    <tr>
+                        <th>Entry ID</th>
+                        <th>Canonical Filename</th>
+                        <th>Payload Format</th>
+                        <th>Role &amp; Firmware Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>0x100</code></td>
+                        <td><code>version.txt</code></td>
+                        <td>ASCII text + LF</td>
+                        <td>Human-readable firmware version string (e.g., <code>"4.93\n"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x101</code></td>
+                        <td><code>license.xml</code></td>
+                        <td>UTF-8 XML or 3B stub</td>
+                        <td>Multi-locale EULA XML (<code>&lt;xml version="1.0" encoding="UTF-8"&gt;&lt;locale ...&gt;</code>) from FW 2.40+; 3-byte placeholder <code>"..."</code> in FW 1.02–2.36.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x102</code></td>
+                        <td><code>promo_flags.txt</code></td>
+                        <td>ASCII text</td>
+                        <td>Optional promotional / kiosk / shop (SEX) targeting flags; absent from standard retail CEX updates.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x103</code></td>
+                        <td><code>update_flags.txt</code></td>
+                        <td>ASCII text + LF</td>
+                        <td>4-character update mode flag introduced in FW 2.50: <code>"0000\n"</code> for full <code>PS3UPDAT.PUP</code> packages; <code>"1000\n"</code> for incremental <code>PS3PATCH.PUP</code> delta updates.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x104</code></td>
+                        <td><code>patch_build.txt</code></td>
+                        <td>ASCII text + LF</td>
+                        <td>Present in incremental <code>PS3PATCH.PUP</code> updates; declares required base version and decimal <code>image_version</code> (e.g., <code>"4.66 64645\n"</code>).</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x200</code></td>
+                        <td><code>ps3swu.self</code></td>
+                        <td>SCE SELF (<code>cat=1</code>)</td>
+                        <td>Primary System Software Updater binary signed with <code>key_revision = 0x0001</code> for compatibility with pre-3.56 consoles.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x201</code></td>
+                        <td><code>vsh.tar</code></td>
+                        <td>POSIX <code>ustar</code> TAR</td>
+                        <td>Updater VSH helper resources (<code>vsh/etc/*.bin</code>, <code>layout_*.txt</code>, 624,640 B) in FW 1.02–1.32; reduced to a 10,240-byte stub archive containing a single 0-byte file named <code>a</code> from FW 1.50 onward.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x202</code></td>
+                        <td><code>dots.txt</code></td>
+                        <td>UTF-8 XML or 3B stub</td>
+                        <td>Introduced in FW 2.20 holding localized release-note strings (<code>msg_updater_*</code>); replaced by the 3-byte stub <code>"..."</code> from FW 2.35 onward.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x203</code></td>
+                        <td><code>patch_data.pkg</code></td>
+                        <td>SCE SPKG (<code>cat=3</code>)</td>
+                        <td>Present in incremental <code>PS3PATCH.PUP</code> packages; encrypted/compressed patch metadata and delta payload.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x300</code></td>
+                        <td><code>update_files.tar</code></td>
+                        <td>POSIX <code>ustar</code> TAR</td>
+                        <td>Primary flash update payload archive containing <code>UPL.xml.pkg</code>, <code>CORE_OS_PACKAGE.pkg</code>, timestamped <code>dev_flash_*.tar.aa.*</code> / <code>dev_flash3_*</code> packages, <code>RL_FOR_*.img</code>, and peripheral firmware SPKGs.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x501</code></td>
+                        <td><code>spkg_hdr.tar</code></td>
+                        <td>POSIX <code>ustar</code> TAR</td>
+                        <td>Introduced in FW 3.56; contains detached 640-byte <code>.spkg_hdr.1</code> alternate headers for every <code>category = 3</code> SPKG member in <code>0x300</code>.</td>
+                    </tr>
+                    <tr>
+                        <td><code>0x601</code></td>
+                        <td><code>ps3swu2.self</code></td>
+                        <td>SCE SELF (<code>cat=1</code>)</td>
+                        <td>Introduced in FW 3.56; secondary System Software Updater binary signed with <code>key_revision = 0x000D</code> for FW 3.56+ consoles and later hardware revisions.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Firmware Generation Schema Evolution</h3>
+        <div class="table-scroll">
+            <table class="format-counts">
+                <caption>Observed Retail PS3 PUP Entry Table Layouts</caption>
+                <thead>
+                    <tr>
+                        <th>Firmware Range</th>
+                        <th><code>file_count</code></th>
+                        <th><code>header_length</code></th>
+                        <th>Present Entry IDs (Ordered)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>FW 1.02 – 2.17 (Full)</td>
+                        <td>5</td>
+                        <td><code>0x190</code> (400 B)</td>
+                        <td><code>0x100, 0x101, 0x200, 0x201, 0x300</code></td>
+                    </tr>
+                    <tr>
+                        <td>FW 2.20 – 2.43 (Full)</td>
+                        <td>6</td>
+                        <td><code>0x1D0</code> (464 B)</td>
+                        <td><code>0x100, 0x101, 0x200, 0x201, 0x202, 0x300</code></td>
+                    </tr>
+                    <tr>
+                        <td>FW 2.50 – 3.55 (Full)</td>
+                        <td>7</td>
+                        <td><code>0x210</code> (528 B)</td>
+                        <td><code>0x100, 0x101, 0x103, 0x200, 0x201, 0x202, 0x300</code></td>
+                    </tr>
+                    <tr>
+                        <td>FW 3.56 – 4.93 (Full)</td>
+                        <td>9</td>
+                        <td><code>0x290</code> (656 B)</td>
+                        <td><code>0x100, 0x101, 0x103, 0x200, 0x201, 0x202, 0x300, 0x501, 0x601</code></td>
+                    </tr>
+                    <tr>
+                        <td>Incremental Patch (<code>PS3PATCH.PUP</code>)</td>
+                        <td>11</td>
+                        <td><code>0x310</code> (784 B)</td>
+                        <td><code>0x100, 0x101, 0x103, 0x104, 0x200, 0x201, 0x202, 0x203, 0x300, 0x501, 0x601</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3>Header Size &amp; HMAC-SHA1 Integrity Formulas</h3>
+        <ul>
+            <li><strong>Header Size Derivation:</strong>
+                <br><code>expected_header_length = 0x30 + (file_count * 0x20) + (file_count * 0x20) + 0x20 = 0x50 + (file_count * 0x40)</code></li>
+            <li><strong>Header Integrity Check:</strong>
+                <br><code>computed_header_hmac = HMAC_SHA1(pup_hmac_key, file[0x00 .. header_length - 0x20])</code>
+                <br>Valid when <code>computed_header_hmac == file[header_length - 0x20 .. header_length - 0x0C]</code>.</li>
+            <li><strong>Per-Entry Integrity Check:</strong>
+                <br>For each Hash Entry Record <code>h</code> referencing <code>e = file_entries[h.entry_index]</code>:
+                <br><code>computed_entry_hmac = HMAC_SHA1(pup_hmac_key, file[e.data_offset .. e.data_offset + e.data_length])</code>
+                <br>Valid when <code>computed_entry_hmac == h.hmac_sha1</code>.</li>
+        </ul>
+    </section>
+
+    <section id="edge-cases">
+        <h2>4. Edge Cases &amp; Loader / Parser Rules</h2>
+        <ul>
+            <li><strong>Blu-ray Disc 256 MiB Zero-Padding:</strong> Retail disc <code>/PS3_UPDATE/PS3UPDAT.PUP</code> files are padded with trailing <code>0x00</code> bytes to exactly <code>268,435,456</code> bytes (<code>0x10000000</code>), even when <code>header_length + data_length</code> is smaller (for example, ~125 MiB on FW 1.93 or ~194 MiB on FW 3.73). Parsers MUST assert <code>actual_file_size &gt;= header_length + data_length</code> (never require exact equality!) and restrict all reads and hash checks to <code>[0 .. header_length + data_length)</code>.</li>
+            <li><strong>Hash Table Indirection (<code>entry_index</code> vs <code>entry_id</code>):</strong> Hash Entry Records reference File Entry Records by 0-based table position <code>entry_index</code> (<code>0 .. file_count - 1</code>), not by <code>entry_id</code>. Always validate <code>entry_index &lt; file_count</code> and ensure every entry index is covered once without duplicates.</li>
+            <li><strong>Contiguous Unaligned Payloads &amp; Bounds Validation:</strong> Payloads pack contiguously starting at <code>header_length</code> with zero inter-entry alignment padding (e.g., if <code>0x100</code> is 5 bytes, <code>0x101</code> begins at <code>header_length + 5</code>). Still honor each entry's explicit <code>data_offset</code> and assert <code>header_length &gt;= 0x50 + file_count * 0x40</code>, <code>data_offset &gt;= header_length</code>, and <code>data_offset + data_length &lt;= header_length + data_length</code> using overflow-safe integer arithmetic.</li>
+            <li><strong>FW 3.56+ Dual-Key Updater Selection:</strong> Starting with firmware 3.56, Sony introduced new signing keys while retaining backward-compatible entry <code>0x200</code> (<code>ps3swu.self</code>, <code>key_revision = 0x0001</code>) alongside <code>0x601</code> (<code>ps3swu2.self</code>, <code>key_revision = 0x000D</code>). Pre-3.56 consoles execute <code>0x200</code> and verify the embedded SPKG headers in <code>0x300</code>; FW 3.56+ consoles execute <code>0x601</code> and verify the detached 640-byte <code>.spkg_hdr.1</code> headers from <code>0x501</code> paired with the encrypted payloads in <code>0x300</code>.</li>
+            <li><strong>Inner SPKG Compression &amp; <code>dev_flash</code> Extraction:</strong> Inside <code>0x300</code> (<code>update_files.tar</code>), each <code>category = 3</code> SPKG member's <code>data_len</code> field (<code>+0x18</code> in the <code>SCE\0</code> common header) declares the <em>uncompressed</em> inner payload length, whereas the stored bytes after <code>header_len</code> (<code>0x280</code>) are AES-encrypted and typically zlib-compressed. Decrypting and decompressing <code>dev_flash_*.tar.aa.&lt;timestamp&gt;</code> yields inner POSIX TAR archives targeting <code>/dev_flash/</code> (and <code>dev_flash3_*</code> targeting <code>/dev_flash3/</code>).</li>
+            <li><strong>Incremental <code>PS3PATCH.PUP</code> Handling:</strong> When <code>0x103</code> (<code>update_flags.txt</code>) is <code>"1000\n"</code> and <code>0x104</code> (<code>patch_build.txt</code>) / <code>0x203</code> (<code>patch_data.pkg</code>) are present, <code>update_files.tar</code> contains a partial delta set applicable only to the exact base firmware version named in <code>patch_build.txt</code>, not a standalone full system flash image.</li>
+        </ul>
+    </section>
+
+    <section id="pseudocode">
+        <h2>5. Parser Pseudocode</h2>
+        <pre><code>const PUP_MAGIC = 0x5343455546000000  // "SCEUF\0\0\0"
+
+const ENTRY_NAMES = {
+    0x100: "version.txt",
+    0x101: "license.xml",
+    0x102: "promo_flags.txt",
+    0x103: "update_flags.txt",
+    0x104: "patch_build.txt",
+    0x200: "ps3swu.self",
+    0x201: "vsh.tar",
+    0x202: "dots.txt",
+    0x203: "patch_data.pkg",
+    0x300: "update_files.tar",
+    0x501: "spkg_hdr.tar",
+    0x601: "ps3swu2.self",
+}
+
+function parse_ps3_pup(stream, pup_hmac_key = null, verify_hmac = true):
+    actual_size = actual_file_size(stream)
+    assert actual_size &gt;= 0x30
+
+    magic           = read_u64be(stream, 0x00)
+    package_version = read_u64be(stream, 0x08)
+    image_version   = read_u64be(stream, 0x10)
+    file_count      = read_u64be(stream, 0x18)
+    header_length   = read_u64be(stream, 0x20)
+    data_length     = read_u64be(stream, 0x28)
+
+    assert magic == PUP_MAGIC
+    assert package_version == 1
+    assert file_count &lt;= (actual_size - 0x50) / 0x40  // overflow-safe entry bound
+
+    min_header_len = 0x50 + (file_count * 0x40)
+    assert header_length &gt;= min_header_len
+    assert header_length &lt;= actual_size
+    assert data_length &lt;= actual_size - header_length  // allows trailing 256 MiB disc zero-padding
+
+    total_pup_end = header_length + data_length
+
+    if verify_hmac and pup_hmac_key != null:
+        header_body      = read_bytes(stream, 0x00, header_length - 0x20)
+        stored_hdr_hmac  = read_bytes(stream, header_length - 0x20, 20)
+        assert hmac_sha1(pup_hmac_key, header_body) == stored_hdr_hmac
+
+    // 1. Parse File Entry Table (starting at 0x30, 32 bytes each)
+    file_entries = []
+    for i in 0 .. file_count - 1:
+        base       = 0x30 + (i * 0x20)
+        entry_id   = read_u64be(stream, base + 0x00)
+        offset     = read_u64be(stream, base + 0x08)
+        length     = read_u64be(stream, base + 0x10)
+        // base + 0x18..0x1F is reserved zero padding
+
+        assert offset &gt;= header_length
+        assert length &lt;= total_pup_end - offset
+        name = ENTRY_NAMES.get(entry_id, format("unknown_{0:04x}.bin", entry_id))
+        file_entries.append({ id: entry_id, name: name, offset: offset, length: length })
+
+    // 2. Parse Hash Entry Table (starting at 0x30 + file_count * 0x20, 32 bytes each)
+    hash_table_base = 0x30 + (file_count * 0x20)
+    seen_indices = set()
+    for i in 0 .. file_count - 1:
+        base        = hash_table_base + (i * 0x20)
+        entry_index = read_u64be(stream, base + 0x00)
+        stored_hmac = read_bytes(stream, base + 0x08, 20)
+        // base + 0x1C..0x1F is 4-byte reserved zero padding
+
+        assert entry_index &lt; file_count
+        assert entry_index not in seen_indices
+        seen_indices.add(entry_index)
+
+        if verify_hmac and pup_hmac_key != null:
+            target = file_entries[entry_index]
+            payload = read_bytes(stream, target.offset, target.length)
+            assert hmac_sha1(pup_hmac_key, payload) == stored_hmac
+
+    // 3. Optional: read member payloads (e.g., inspect POSIX ustar TARs for 0x201, 0x300, 0x501)
+    return {
+        package_version: package_version,
+        image_version: image_version,
+        header_length: header_length,
+        data_length: data_length,
+        entries: file_entries
+    }</code></pre>
+    </section>
+
+    <section id="provenance">
+        <h2>6. Provenance &amp; Confidence</h2>
+        <ul>
+            <li><span class="badge confidence-confirmed">Confirmed Spec</span> <strong>Container &amp; Retail Schemas:</strong> The 48-byte <code>SCEUF</code> main header, 32-byte File Entry and Hash Entry tables, 32-byte header HMAC footer, entry IDs (<code>0x100</code>, <code>0x101</code>, <code>0x103</code>, <code>0x104</code>, <code>0x200</code>–<code>0x203</code>, <code>0x300</code>, <code>0x501</code>, <code>0x601</code>), the 5-schema evolution across retail firmware versions 1.02–4.93 and <code>PS3PATCH.PUP</code>, 256 MiB Blu-ray disc zero-padding, POSIX <code>ustar</code> inner TAR layouts, and <code>SCE\0</code> category 1/2/3 inner headers are verified empirically across official retail firmware packages and disc updates.</li>
+            <li><span class="badge confidence-revision">SDK-Revision-Dependent</span> <span class="badge confidence-unverified">Unverified / Reserved</span> <strong>Non-Retail Variants &amp; Reserved Padding:</strong> Promotional/kiosk/DEX-targeted entry IDs (such as <code>0x102</code> <code>promo_flags.txt</code> or debug-only updater records), undocumented <code>update_flags.txt</code> bit combinations outside retail <code>0000</code>/<code>1000</code>, and the trailing padding fields in File Entry, Hash Entry, and Header Footer records (observed as all-zero across retail releases) are SDK/target-dependent or vendor-reserved.</li>
+        </ul>
+        <aside class="callout-warn" aria-label="Cryptographic key caveat">
+            <p><strong>Cryptographic Key Caveat:</strong> Sony's PUP HMAC-SHA1 verification key, SELF (<code>ps3swu.self</code> / <code>ps3swu2.self</code>) decryption keys, and SPKG/RVK AES and ECDSA keys are proprietary and intentionally omitted from this specification. Outer PUP parsing, entry extraction, plaintext metadata reading (<code>version.txt</code>, <code>license.xml</code>, <code>update_flags.txt</code>, <code>patch_build.txt</code>, <code>dots.txt</code>), and TAR member enumeration (<code>vsh.tar</code>, <code>update_files.tar</code>, <code>spkg_hdr.tar</code>) operate cleanly without private keys.</p>
+        </aside>
+    </section>
+</body>
+</html>
